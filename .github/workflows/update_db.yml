@@ -1,0 +1,33 @@
+name: Update OpenPowerlifting Database
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # Uruchamiaj co niedzielę o 00:00
+  workflow_dispatch: # Pozwala też uruchomić ręcznie z przycisku w GitHubie
+
+jobs:
+  update-db:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kodu
+        uses: actions/checkout@v3
+
+      - name: Konfiguracja Pythona
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalacja zależności
+        run: pip install pandas pyarrow requests
+
+      - name: Pobranie i konwersja bazy
+        run: python update_data.py
+
+      - name: Publikacja pliku w GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest-data
+          name: Latest OpenPowerlifting Data
+          files: openpowerlifting.parquet
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
