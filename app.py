@@ -7,12 +7,19 @@ import plotly.graph_objects as go
 from datetime import date
 import re
 import urllib.parse
-
 # ---------------------------------------------------------------------------
 # PAGE CONFIGURATION
 # ---------------------------------------------------------------------------
+DATA_URL ="https://github.com/PawelWyrodek/PowerliftingCompare/releases/download/latest-data/openpowerlifting.parquet"
 st.set_page_config(page_title="Performance Engine", layout="wide", initial_sidebar_state="expanded")
+@st.cache_data(ttl="1d")  # Pamięć podręczna odświeża się raz na dobę
+def load_data():
+    return pd.read_parquet(DATA_URL)
 
+st.title("Powerlifting Performance Comparison")
+
+# Wczytanie danych
+df = load_data()
 st.markdown("""
     <style>
         div[data-testid="InputInstructions"] { display: none !important; }
