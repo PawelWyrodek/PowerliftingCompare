@@ -7,18 +7,21 @@ import plotly.graph_objects as go
 from datetime import date
 import re
 import urllib.parse
+
 # ---------------------------------------------------------------------------
 # PAGE CONFIGURATION
 # ---------------------------------------------------------------------------
 DATA_URL ="https://github.com/PawelWyrodek/PowerliftingCompare/releases/download/latest-data/openpowerlifting.parquet"
 st.set_page_config(page_title="Performance Engine", layout="wide", initial_sidebar_state="expanded")
-@st.cache_data(ttl="1d")  # Pamięć podręczna odświeża się raz na dobę
+
+# Cache refreshes once a day
+@st.cache_data(ttl="1d")
 def load_data():
     return pd.read_parquet(DATA_URL)
 
 st.title("Powerlifting Performance Comparison")
 
-# Wczytanie danych
+# Load data
 df = load_data()
 st.markdown("""
     <style>
@@ -30,8 +33,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-DB_PATH = "database25.07.26.db"
-
 # ---------------------------------------------------------------------------
 # INITIALIZATION & STATE MANAGEMENT
 # ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ for key in ["df_a", "df_b", "ath_df", "ath_df_a", "ath_df_b", "df_comp"]:
     if key not in st.session_state:
         st.session_state[key] = pd.DataFrame()
         
-# Odczytujemy URL tylko przy PIERWSZYM uruchomieniu aplikacji, unikając konfliktu ze zmianami w menu
+# Read URL only on the FIRST app launch to avoid conflict with menu changes
 if "app_initialized" not in st.session_state:
     params = st.query_params
     if "mode" in params:
@@ -90,13 +91,14 @@ def sort_weight_class(value):
 # DUCKDB CONNECTION & DATA WASHER
 # ---------------------------------------------------------------------------
 @st.cache_resource
-def get_connection():
+def get_connection(_data):
     conn = duckdb.connect()
-    conn.execute("SET sqlite_all_varchar=true;")
-    conn.execute(f"ATTACH '{DB_PATH}' AS main_db (TYPE SQLITE, READ_ONLY);")
+    
+    # Register the loaded Pandas DataFrame directly instead of using a SQLite file
+    conn.register("main_db_powerlifting", _data)
     
     conn.execute("""
-        CREATE OR REPLACE TEMPORARY VIEW czysta_baza AS
+        CREATE OR REPLACE TEMPORARY VIEW clean_db AS
         SELECT * REPLACE (
             TRY_CAST(Date AS DATE) as Date,
             TRY_CAST(Age AS DOUBLE) as Age,
@@ -122,12 +124,12 @@ def get_connection():
         WHEN Sex = 'F' THEN
             TRY_CAST(TotalKg AS DOUBLE) * 100.0 / (610.79046 - 451.04414 * EXP(-0.00735665 * TRY_CAST(BodyweightKg AS DOUBLE)))
         ELSE NULL END as GLPoints
-        FROM main_db.powerlifting;
+        FROM main_db_powerlifting;
     """)
     return conn
 
 @st.cache_data
-def load_countries_and_continents():
+def load_countries_and_continents(_data):
     default_continents = {
         "Africa": ["Niger", "Nigeria", "South Africa", "Egypt", "Algeria", "Morocco", "Ghana", "Cameroon", "Zimbabwe", "Kenya", "Senegal"],
         "Asia": ["Japan", "Kazakhstan", "China", "India", "Iran", "Taiwan", "South Korea", "Mongolia", "Singapore", "Malaysia", "Philippines", "Indonesia", "UAE"],
@@ -137,8 +139,8 @@ def load_countries_and_continents():
         "South America": ["Brazil", "Argentina", "Chile", "Colombia", "Peru", "Ecuador", "Venezuela", "Uruguay"]
     }
     try:
-        conn = get_connection()
-        df_db = conn.execute("SELECT DISTINCT Country FROM czysta_baza WHERE Country IS NOT NULL").df()
+        conn = get_connection(_data)
+        df_db = conn.execute("SELECT DISTINCT Country FROM clean_db WHERE Country IS NOT NULL").df()
         db_countries = sorted([str(c).strip() for c in df_db['Country'].dropna().unique() if str(c).strip()])
     except Exception:
         all_c = []
@@ -160,10 +162,10 @@ def load_countries_and_continents():
     return display_countries, country_to_continent
 
 @st.cache_data
-def load_federations():
+def load_federations(_data):
     try:
-        conn = get_connection()
-        feds_df = conn.execute("SELECT DISTINCT Federation, ParentFederation FROM czysta_baza WHERE Federation IS NOT NULL").df()
+        conn = get_connection(_data)
+        feds_df = conn.execute("SELECT DISTINCT Federation, ParentFederation FROM clean_db WHERE Federation IS NOT NULL").df()
         feds_list = sorted(feds_df['Federation'].dropna().unique().tolist())
         parent_feds_list = sorted(feds_df['ParentFederation'].dropna().unique().tolist())
         fed_to_parent = dict(zip(feds_df['Federation'], feds_df['ParentFederation']))
@@ -172,26 +174,23 @@ def load_federations():
         return [], [], {}
 
 @st.cache_data
-def load_weight_class_options():
+def load_weight_class_options(_data):
     popular_classes = ('43', '44', '47', '48', '52', '53', '56', '57', '59', '60', '63', '66', '67.5', '69', '74', '75', '76', '82.5', '83', '84', '84+', '90', '90+', '93', '100', '100+', '105', '110', '115', '120', '120+', '125', '140', '140+')
     try:
-        conn = get_connection()
+        conn = get_connection(_data)
         placeholders = ",".join(["?"] * len(popular_classes))
-        q = f"SELECT DISTINCT WeightClassKg FROM czysta_baza WHERE WeightClassKg IN ({placeholders})"
-        df = conn.execute(q, popular_classes).df()
-        if df.empty: return []
+        q = f"SELECT DISTINCT WeightClassKg FROM clean_db WHERE WeightClassKg IN ({placeholders})"
+        df_db = conn.execute(q, popular_classes).df()
+        if df_db.empty: return []
         
-        df['WeightClassKg'] = df['WeightClassKg'].astype(str).str.strip()
-        options = df['WeightClassKg'].unique()
+        df_db['WeightClassKg'] = df_db['WeightClassKg'].astype(str).str.strip()
+        options = df_db['WeightClassKg'].unique()
         return sorted(list(options), key=lambda x: sort_weight_class(x))
     except Exception: return []
 
-
-
-display_countries, country_to_continent = load_countries_and_continents()
-feds_list, parent_feds_list, fed_to_parent = load_federations()
-weight_class_options = load_weight_class_options()
-
+display_countries, country_to_continent = load_countries_and_continents(df)
+feds_list, parent_feds_list, fed_to_parent = load_federations(df)
+weight_class_options = load_weight_class_options(df)
 
 METRIC_OPTIONS = ["Total", "Dots", "Wilks", "GL Points", "Squat", "Bench", "Deadlift", "Bodyweight", "Date"]
 METRIC_SQL_MAP = {
@@ -329,7 +328,7 @@ def build_query(cfg):
     query = f"""
         WITH TargetAthletes AS (
             SELECT DISTINCT p.Name, IFNULL(p.Country, '') as CountryStr
-            FROM czysta_baza p
+            FROM clean_db p
             {base_where}
         ),
         CareerData AS (
@@ -337,7 +336,7 @@ def build_query(cfg):
                    ROW_NUMBER() OVER(PARTITION BY p.Name, IFNULL(p.Country, '') ORDER BY p.Date) as MeetNum,
                    MIN(p.Date) OVER(PARTITION BY p.Name, IFNULL(p.Country, '')) as CareerStart,
                    MAX(p.Date) OVER(PARTITION BY p.Name, IFNULL(p.Country, '')) as CareerEnd
-            FROM czysta_baza p
+            FROM clean_db p
             INNER JOIN TargetAthletes ta ON p.Name = ta.Name AND IFNULL(p.Country, '') = ta.CountryStr
         ),
         RawMeets AS (
@@ -365,17 +364,17 @@ def build_query(cfg):
     final_params = base_params + base_params + filtered_params
     return query, final_params
 
-def run_group_analysis(cfg):
-    conn = get_connection()
+def run_group_analysis(cfg, _data):
+    conn = get_connection(_data)
     query, params = build_query(cfg)
-    df = conn.execute(query, params).df()
+    df_res = conn.execute(query, params).df()
 
-    if df.empty: return df
+    if df_res.empty: return df_res
     
-    df["Age"] = df["Age"].fillna(0).astype(int)
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df_res["Age"] = df_res["Age"].fillna(0).astype(int)
+    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce')
     
-    df.rename(columns={
+    df_res.rename(columns={
         "TotalKg": "Total", "Best3SquatKg": "Squat", "Best3BenchKg": "Bench", 
         "Best3DeadliftKg": "Deadlift", "BodyweightKg": "Bodyweight", 
         "MeetNum": "Meet#", "LongevityToMeet": "Experience", "WeightClassKg": "WeightClass",
@@ -383,9 +382,9 @@ def run_group_analysis(cfg):
     }, inplace=True)
     
     for col in ["Squat", "Bench", "Deadlift", "Total", "Dots", "Wilks", "GL Points"]:
-        if col in df.columns: df[col] = df[col].fillna(0)
+        if col in df_res.columns: df_res[col] = df_res[col].fillna(0)
         
-    return df
+    return df_res
 
 def check_weight_conflict(cfg):
     if cfg["weight_classes"]:
@@ -400,12 +399,12 @@ def check_weight_conflict(cfg):
         if not overlap:
             st.warning("Warning: Your selected Bodyweight Range might not completely overlap with the chosen Weight classes. Some athletes may be naturally lighter than their upper weight class limit.")
 
-def render_dataframe(df, key_prefix="table", set_index=None):
-    if df is None or df.empty:
-        st.dataframe(df, use_container_width=True)
+def render_dataframe(df_disp, key_prefix="table", set_index=None):
+    if df_disp is None or df_disp.empty:
+        st.dataframe(df_disp, use_container_width=True)
         return
 
-    df_disp = df.copy()
+    df_disp = df_disp.copy()
     config = {}
     
     if "Name" in df_disp.columns:
@@ -462,25 +461,25 @@ def numeric_range_input(label, min_val, max_val, default_low, default_high, step
 
     return st.session_state[min_key], st.session_state[max_key]
 
-# BEZPIECZNE RENDEROWANIE ZAWODNIKA (Rozwiązuje problem z zawieszaniem aplikacji przy dużej liczbie opcji)
-def render_athlete_selectbox(label, key):
+# SAFE ATHLETE RENDERING (Solves the problem of app freezing with a large number of options)
+def render_athlete_selectbox(label, key, _data):
     search_key = f"{key}_search_input"
     current_val = st.session_state.get(key, None)
     
-    # Krok 1: Pole tekstowe do dynamicznego wyszukiwania
+    # Step 1: Text input for dynamic search
     search_term = st.text_input(f"{label} (min. 3 characters):", key=search_key)
     
     options = []
-    # Utrzymujemy dotychczasowy wybór (np. z URL lub wcześniejszego wyszukiwania)
+    # Keep the previous selection (e.g., from URL or previous search)
     if current_val:
         options.append(current_val)
         
-    # Jeśli użytkownik wpisze co najmniej 3 znaki, odpytujemy bazę
+    # If user types at least 3 characters, query the database
     if search_term and len(search_term) >= 3:
         try:
-            conn = get_connection()
-            # ILIKE zapewnia wyszukiwanie ignorujące wielkość liter
-            res = conn.execute("SELECT DISTINCT Name FROM czysta_baza WHERE Name ILIKE ? ORDER BY Name LIMIT 100", [f"%{search_term}%"]).df()
+            conn = get_connection(_data)
+            # ILIKE ensures case-insensitive search
+            res = conn.execute("SELECT DISTINCT Name FROM clean_db WHERE Name ILIKE ? ORDER BY Name LIMIT 100", [f"%{search_term}%"]).df()
             if not res.empty:
                 for n in res['Name'].tolist():
                     if n not in options:
@@ -488,11 +487,11 @@ def render_athlete_selectbox(label, key):
         except Exception:
             pass
     
-    # Krok 2: Selectbox ograniczony tylko do wyników wyszukiwania (bezpieczne dla Streamlit)
+    # Step 2: Selectbox limited to search results (safe for Streamlit)
     if options:
         return st.selectbox("Select exact match:", options=options, key=key)
     else:
-        # Dodano brakujący key=key, co rozwiązuje konflikt ID!
+        # Added missing key=key, resolving the ID conflict
         return st.selectbox("Select exact match:", options=["Type above to search..."], disabled=True, key=key)
 
 # ---------------------------------------------------------------------------
@@ -509,7 +508,9 @@ analysis_mode = st.sidebar.radio("Select Analysis Mode", MODES, index=MODES.inde
 st.session_state.active_mode = analysis_mode
 st.query_params["mode"] = analysis_mode 
 
-def render_group_filters(prefix, default_label, default_sex="M", default_equip=["Raw"], default_countries=None):
+def render_group_filters(prefix, default_label, default_sex="M", default_equip=None, default_countries=None):
+    if default_equip is None:
+        default_equip = ["Raw"]
     default_countries = default_countries or []
     
     col1, col2, col3 = st.columns(3)
@@ -604,14 +605,14 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=[
         metric=metric_label, top_n=top_n_val
     )
 
-def render_strength_standards(df, cfg, exact_bw_target=None):
+def render_strength_standards(df_src, cfg, exact_bw_target=None):
     with st.expander(f"{cfg['group_name']} Strength Standards", expanded=False):
         st.markdown("Standards are generated based on the currently filtered metric (greater than 0) inside the chosen group time range and filters.")
         
         target_metric = cfg["metric"] if cfg["metric"] in ["Total", "Squat", "Bench", "Deadlift"] else "Total"
         st.write(f"**Target Metric for standards**: {target_metric}")
         
-        valid_df = df[df[target_metric] > 0].copy()
+        valid_df = df_src[df_src[target_metric] > 0].copy()
         valid_df['WeightClass'] = pd.to_numeric(valid_df['WeightClass'], errors='coerce')
         valid_df = valid_df.dropna(subset=['WeightClass'])
         
@@ -726,17 +727,17 @@ def render_strength_standards(df, cfg, exact_bw_target=None):
             }
         )
 
-def render_competition_section(df, cfg):
+def render_competition_section(df_src, cfg):
     comp_tabs = st.tabs(["Athletes Chart", "Category Difficulty", "Results Table"])
     
     with comp_tabs[0]:
         st.write("Compare categories or athletes based on performance.")
         
-        valid_wcs = sorted(df['WeightClass'].dropna().astype(str).unique(), key=sort_weight_class)
+        valid_wcs = sorted(df_src['WeightClass'].dropna().astype(str).unique(), key=sort_weight_class)
         sel_comp_wcs = st.multiselect("Select Weight Classes for Chart", valid_wcs, default=valid_wcs, key=f"{cfg['group_name']}_comp_wc")
         comp_metric = st.selectbox("Select Metric", ["Total", "Dots", "Wilks", "GL Points"], key=f"{cfg['group_name']}_comp_metric")
         
-        c_df = df[df['WeightClass'].astype(str).isin(sel_comp_wcs)].copy()
+        c_df = df_src[df_src['WeightClass'].astype(str).isin(sel_comp_wcs)].copy()
         if not c_df.empty:
             fig = px.scatter(
                 c_df, x="Bodyweight", y=comp_metric, color="WeightClass",
@@ -754,7 +755,7 @@ def render_competition_section(df, cfg):
         if agg_type == "Placement (Top N)":
             place_n = st.selectbox("Select Placement", [1, 2, 3, 4, 5, 6, 7, 8], key=f"{cfg['group_name']}_place_n")
         
-        diff_df = df.dropna(subset=['WeightClass', diff_metric]).copy()
+        diff_df = df_src.dropna(subset=['WeightClass', diff_metric]).copy()
         diff_df['WeightClass'] = diff_df['WeightClass'].astype(str)
         
         if agg_type in ["Average", "Median", "Placement (Top N)"]:
@@ -791,10 +792,10 @@ def render_competition_section(df, cfg):
 
     with comp_tabs[2]:
         st.write("Dynamically display weight category results.")
-        t_wcs = sorted(df['WeightClass'].dropna().astype(str).unique(), key=sort_weight_class)
+        t_wcs = sorted(df_src['WeightClass'].dropna().astype(str).unique(), key=sort_weight_class)
         sel_t_wcs = st.multiselect("Select Categories to Display in Table", t_wcs, default=t_wcs, key=f"{cfg['group_name']}_t_wcs")
         
-        t_df = df[df['WeightClass'].astype(str).isin(sel_t_wcs)].copy()
+        t_df = df_src[df_src['WeightClass'].astype(str).isin(sel_t_wcs)].copy()
         
         default_cols = ["Place", "Name", "Age", "WeightClass", "Total", "Dots", "Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"]
         available_cols = ["Place", "Name", "Age", "AgeCategory", "WeightClass", "Bodyweight", "Total", "Dots", "Wilks", "GL Points", 
@@ -817,20 +818,22 @@ def render_competition_section(df, cfg):
             for age_cat in display_t_df["AgeCategory"].dropna().unique():
                 st.markdown(f"#### {age_cat}")
                 cat_df = display_t_df[display_t_df["AgeCategory"] == age_cat]
-                render_dataframe(cat_df[sel_cols], key_prefix=f"{cfg['group_name']}_t_{age_cat}")
+                display_cols = [c for c in sel_cols if c in cat_df.columns]
+                render_dataframe(cat_df[display_cols], key_prefix=f"{cfg['group_name']}_t_{age_cat}")
         else:
-            render_dataframe(display_t_df[sel_cols], key_prefix=f"{cfg['group_name']}_t")
+            display_cols = [c for c in sel_cols if c in display_t_df.columns]
+            render_dataframe(display_t_df[display_cols], key_prefix=f"{cfg['group_name']}_t")
 
-def render_group_tab(df, cfg, exact_bw_target=None):
-    if df is None or df.empty:
+def render_group_tab(df_src, cfg, exact_bw_target=None):
+    if df_src is None or df_src.empty:
         st.warning(f"No data found for {cfg['group_name']}.")
         return
-    st.success(f"Loaded {len(df):,} athletes in {cfg['group_name']}.")
+    st.success(f"Loaded {len(df_src):,} athletes in {cfg['group_name']}.")
     
     st.session_state.score_sys = st.radio("Select Points System for Analysis (Tables and Charts):", ["Dots", "Wilks", "GL Points"], horizontal=True, key=f"{cfg['group_name']}_score_sys")
     sys_col = st.session_state.score_sys
     
-    render_strength_standards(df, cfg, exact_bw_target)
+    render_strength_standards(df_src, cfg, exact_bw_target)
     
     st.subheader("Distribution Statistics", anchor=False)
     sc1, sc2, sc3 = st.columns([1, 1, 2])
@@ -839,7 +842,7 @@ def render_group_tab(df, cfg, exact_bw_target=None):
         target_met = st.selectbox("Select Metric", ["Total", sys_col, "Squat", "Bench", "Deadlift"], index=["Total", sys_col, "Squat", "Bench", "Deadlift"].index(default_target_metric), key=f"{cfg['group_name']}_tgtmet")
         p_val = st.number_input("Better than %", min_value=0, max_value=100, value=90, step=1, key=f"{cfg['group_name']}_pval")
     
-    valid_scores = df[df[target_met] > 0][target_met].dropna()
+    valid_scores = df_src[df_src[target_met] > 0][target_met].dropna()
     if not valid_scores.empty:
         c_mult = 1.0 if target_met in ["Dots", "Wilks", "GL Points"] else mult
         avg_val = valid_scores.mean() * c_mult
@@ -854,7 +857,7 @@ def render_group_tab(df, cfg, exact_bw_target=None):
         st.info("No valid records for this metric.")
         
     if "SBD" in cfg.get("events", []):
-        sbd_df = df[(df["Squat"] > 0) & (df["Bench"] > 0) & (df["Deadlift"] > 0) & (df["Total"] > 0)].copy()
+        sbd_df = df_src[(df_src["Squat"] > 0) & (df_src["Bench"] > 0) & (df_src["Deadlift"] > 0) & (df_src["Total"] > 0)].copy()
         if not sbd_df.empty:
             sq_prop = (sbd_df["Squat"] / sbd_df["Total"]).mean() * 100
             bp_prop = (sbd_df["Bench"] / sbd_df["Total"]).mean() * 100
@@ -866,9 +869,9 @@ def render_group_tab(df, cfg, exact_bw_target=None):
     dist_met = st.selectbox("Chart Metric", ["Total", "Dots", "Wilks", "GL Points", "Squat", "Bench", "Deadlift", "Bodyweight", "Age", "Experience", "Equipment"], index=["Total", "Dots", "Wilks", "GL Points", "Squat", "Bench", "Deadlift", "Bodyweight", "Age", "Experience", "Equipment"].index(default_dist), key=f"{cfg['group_name']}_distmet")
     
     if dist_met == "Equipment":
-        fig_dist = px.histogram(df.dropna(subset=["Equipment"]), x="Equipment", color_discrete_sequence=["#1565C0"])
+        fig_dist = px.histogram(df_src.dropna(subset=["Equipment"]), x="Equipment", color_discrete_sequence=["#1565C0"])
     else:
-        dist_df = df[df[dist_met] > 0] if dist_met not in ["Dots", "Wilks", "GL Points", "Bodyweight", "Age", "Experience"] else df.dropna(subset=[dist_met])
+        dist_df = df_src[df_src[dist_met] > 0] if dist_met not in ["Dots", "Wilks", "GL Points", "Bodyweight", "Age", "Experience"] else df_src.dropna(subset=[dist_met])
         if not dist_df.empty:
             d_mult = mult if dist_met not in ["Dots", "Wilks", "GL Points", "Age", "Experience"] else 1.0
             fig_dist = px.histogram(dist_df, x=dist_df[dist_met]*d_mult, nbins=40, marginal="box", color_discrete_sequence=["#1565C0"])
@@ -886,7 +889,7 @@ def render_group_tab(df, cfg, exact_bw_target=None):
     with c3: c_ax = st.selectbox("Color by", c_opts, key=f"{cfg['group_name']}_c")
     with c4: show_trend = st.checkbox("Trendline", key=f"{cfg['group_name']}_trend")
     
-    df_plot = df.dropna(subset=[x_ax, y_ax]).copy()
+    df_plot = df_src.dropna(subset=[x_ax, y_ax]).copy()
     if c_ax != "None":
         if pd.api.types.is_numeric_dtype(df_plot[c_ax]): df_plot[c_ax] = df_plot[c_ax].fillna(0)
         else: df_plot[c_ax] = df_plot[c_ax].fillna("Unknown")
@@ -905,7 +908,7 @@ def render_group_tab(df, cfg, exact_bw_target=None):
         st.plotly_chart(fig_custom, use_container_width=True)
 
     st.subheader("Leaderboard Table", anchor=False)
-    df_table = df.copy()
+    df_table = df_src.copy()
     for col in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]: 
         df_table[col] = (df_table[col] * mult).round(1)
         
@@ -924,33 +927,33 @@ def render_group_tab(df, cfg, exact_bw_target=None):
     
     render_dataframe(df_display[display_cols], key_prefix=f"{cfg['group_name']}_l", set_index="Rank" if "Rank" in display_cols else None)
 
-def fetch_athlete_data(name):
-    conn = get_connection()
+def fetch_athlete_data(name, _data):
+    conn = get_connection(_data)
     q = """
         SELECT p.*,
                ROW_NUMBER() OVER(PARTITION BY p.Name, IFNULL(p.Country, '') ORDER BY p.Date) as MeetNum,
                MIN(p.Date) OVER(PARTITION BY p.Name, IFNULL(p.Country, '')) as CareerStart
-        FROM czysta_baza p
+        FROM clean_db p
         WHERE p.Name = ?
         ORDER BY p.Date ASC
     """
-    df = conn.execute(q, [name]).df()
-    if not df.empty:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df['CareerStart'] = pd.to_datetime(df['CareerStart'], errors='coerce')
-        df['LongevityToMeet'] = (df['Date'] - df['CareerStart']).dt.days / 365.25
-        df['EstBirthYear'] = df['Date'].dt.year - df['Age'] # NOWE: Szacowany rok urodzenia
-        df.rename(columns={
+    df_res = conn.execute(q, [name]).df()
+    if not df_res.empty:
+        df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce')
+        df_res['CareerStart'] = pd.to_datetime(df_res['CareerStart'], errors='coerce')
+        df_res['LongevityToMeet'] = (df_res['Date'] - df_res['CareerStart']).dt.days / 365.25
+        df_res['EstBirthYear'] = df_res['Date'].dt.year - df_res['Age'] # NEW: Estimated birth year
+        df_res.rename(columns={
             "TotalKg": "Total", "Best3SquatKg": "Squat", "Best3BenchKg": "Bench", 
             "Best3DeadliftKg": "Deadlift", "BodyweightKg": "Bodyweight", 
             "MeetNum": "Meet#", "LongevityToMeet": "Experience", "WeightClassKg": "WeightClass",
             "GLPoints": "GL Points"
         }, inplace=True)
-        df["NormMeet"] = df["MeetName"].apply(normalize_meet_name)
-    return df
+        df_res["NormMeet"] = df_res["MeetName"].apply(normalize_meet_name)
+    return df_res
 
-def apply_athlete_filters(df, key_prefix):
-    filtered = df.copy()
+def apply_athlete_filters(df_src, key_prefix):
+    filtered = df_src.copy()
     if filtered.empty: return filtered
     
     st.markdown("#### Filter Athlete Career")
@@ -1016,7 +1019,7 @@ elif analysis_mode == "Result vs group":
 
 elif analysis_mode == "Athlete vs group":
     st.markdown("**Select Athlete**")
-    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected_vg")
+    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected_vg", df)
     st.markdown("---")
     cfg_g = render_group_filters("avg", "Reference Group", default_countries=[])
     if st.button("Run Analysis", use_container_width=True):
@@ -1036,14 +1039,14 @@ elif analysis_mode == "Group vs group":
         st.session_state.cfg_b_req = cfg_b
 
 elif analysis_mode == "Athlete":
-    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected")
+    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected", df)
     if st.button("Run Analysis", use_container_width=True):
         st.session_state.submit_clicked = True
 
 elif analysis_mode == "Athlete vs athlete":
     col_s1, col_s2 = st.columns(2)
-    with col_s1: render_athlete_selectbox("Select Athlete A:", "ath_a_sel")
-    with col_s2: render_athlete_selectbox("Select Athlete B:", "ath_b_sel")
+    with col_s1: render_athlete_selectbox("Select Athlete A:", "ath_a_sel", df)
+    with col_s2: render_athlete_selectbox("Select Athlete B:", "ath_b_sel", df)
         
     vs_event_opt = st.selectbox("Compare Lift Type (Event):", ["Any", "SBD", "S", "B", "D", "SB", "BD", "SD"], index=0)
     if st.button("Run Analysis", use_container_width=True):
@@ -1052,17 +1055,17 @@ elif analysis_mode == "Athlete vs athlete":
 
 elif analysis_mode == "Competition Analysis":
     st.markdown("## Competition Analysis")
-    # Zamiast przekazywać `value`, po prostu używamy klucza `key`, co rozwiązuje konflikt ze stanem sesji
+    # Instead of passing `value`, we just use the `key` to resolve session state conflicts
     comp_search = st.text_input("Search Competition Name (Type at least 3 characters):", key="comp_search_val")
     
     if comp_search and len(comp_search) >= 3:
-        conn = get_connection()
-        comps_df = conn.execute("SELECT DISTINCT MeetName FROM czysta_baza WHERE MeetName ILIKE ?", [f"%{comp_search}%"]).df()
+        conn = get_connection(df)
+        comps_df = conn.execute("SELECT DISTINCT MeetName FROM clean_db WHERE MeetName ILIKE ?", [f"%{comp_search}%"]).df()
         if comps_df is not None and not comps_df.empty:
             comp_list = sorted(comps_df['MeetName'].dropna().unique().tolist())
             sel_comp = st.selectbox("Select Competition:", comp_list, key="sel_comp_ui")
             
-            years_df = conn.execute("SELECT DISTINCT extract(year from Date) as Year FROM czysta_baza WHERE MeetName = ? ORDER BY Year DESC", [sel_comp]).df()
+            years_df = conn.execute("SELECT DISTINCT extract(year from Date) as Year FROM clean_db WHERE MeetName = ? ORDER BY Year DESC", [sel_comp]).df()
             years = years_df['Year'].dropna().astype(int).astype(str).tolist()
             year_opt = st.selectbox("Select Year:", ["All Years (Compare)"] + years, key="sel_comp_year_ui")
             
@@ -1083,23 +1086,23 @@ elif analysis_mode == "Calculators":
 if st.session_state.submit_clicked:
     if analysis_mode in ["Group", "Result vs group"]:
         with st.spinner("Crunching data with DuckDB..."):
-            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
+            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req, df)
             st.session_state.cfg_a = st.session_state.cfg_a_req
             
     elif analysis_mode == "Athlete vs group":
         ath_name = st.session_state.get("ath_selected_vg")
         if ath_name and isinstance(ath_name, str):
             with st.spinner("Fetching athlete..."): 
-                st.session_state.ath_df = fetch_athlete_data(ath_name)
+                st.session_state.ath_df = fetch_athlete_data(ath_name, df)
         with st.spinner("Crunching group data..."):
-            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
+            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req, df)
             st.session_state.cfg_a = st.session_state.cfg_a_req
                 
     elif analysis_mode == "Group vs group":
         with st.spinner(f"Crunching {st.session_state.cfg_a_req['group_name']}..."): 
-            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
+            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req, df)
         with st.spinner(f"Crunching {st.session_state.cfg_b_req['group_name']}..."): 
-            st.session_state.df_b = run_group_analysis(st.session_state.cfg_b_req)
+            st.session_state.df_b = run_group_analysis(st.session_state.cfg_b_req, df)
         st.session_state.cfg_a = st.session_state.cfg_a_req
         st.session_state.cfg_b = st.session_state.cfg_b_req
 
@@ -1107,28 +1110,28 @@ if st.session_state.submit_clicked:
         ath_name = st.session_state.get("ath_selected")
         if ath_name and isinstance(ath_name, str):
             with st.spinner("Fetching athlete..."): 
-                st.session_state.ath_df = fetch_athlete_data(ath_name)
+                st.session_state.ath_df = fetch_athlete_data(ath_name, df)
 
     elif analysis_mode == "Athlete vs athlete":
         a_name = st.session_state.get("ath_a_sel")
         b_name = st.session_state.get("ath_b_sel")
         if a_name and isinstance(a_name, str) and b_name and isinstance(b_name, str):
             with st.spinner("Fetching Athlete A..."): 
-                st.session_state.ath_df_a = fetch_athlete_data(a_name)
+                st.session_state.ath_df_a = fetch_athlete_data(a_name, df)
             with st.spinner("Fetching Athlete B..."): 
-                st.session_state.ath_df_b = fetch_athlete_data(b_name)
+                st.session_state.ath_df_b = fetch_athlete_data(b_name, df)
             
     elif analysis_mode == "Competition Analysis":
         sel_comp = st.session_state.get("sel_comp")
         sel_year = st.session_state.get("sel_comp_year")
         if sel_comp:
             with st.spinner("Fetching competition data..."):
-                conn = get_connection()
+                conn = get_connection(df)
                 if sel_year and sel_year != "All Years (Compare)":
-                    df_comp = conn.execute("SELECT * FROM czysta_baza WHERE MeetName = ? AND extract(year from Date) = ?", [sel_comp, int(sel_year)]).df()
+                    df_comp = conn.execute("SELECT * FROM clean_db WHERE MeetName = ? AND extract(year from Date) = ?", [sel_comp, int(sel_year)]).df()
                     comp_display_name = f"{sel_comp} ({sel_year})"
                 else:
-                    df_comp = conn.execute("SELECT * FROM czysta_baza WHERE MeetName = ?", [sel_comp]).df()
+                    df_comp = conn.execute("SELECT * FROM clean_db WHERE MeetName = ?", [sel_comp]).df()
                     comp_display_name = f"{sel_comp} (All Years)"
 
                 if df_comp is not None and not df_comp.empty:
@@ -1373,10 +1376,10 @@ elif analysis_mode == "Athlete vs athlete":
         st.subheader(f"Head-to-Head: {name_a} vs {name_b}", anchor=False)
         if vs_event != "Any": st.caption(f"Filtered to Event: {vs_event}")
         
-        def get_stat(df, col, agg="max"): 
-            if df.empty: return np.nan
-            if agg == "median": return df[col].median()
-            return df[col].max() if agg=="max" else df[col].min()
+        def get_stat(df_stat, col, agg="max"): 
+            if df_stat.empty: return np.nan
+            if agg == "median": return df_stat[col].median()
+            return df_stat[col].max() if agg=="max" else df_stat[col].min()
         
             col1, col2, col3 = st.columns(3)
             col1.markdown(f"### {name_a}")
@@ -1519,7 +1522,7 @@ elif analysis_mode == "Calculators":
     calc_dl_1rm = calc_1rm(calc_dl_w, calc_dl_r)
     calc_total = calc_sq_1rm + calc_bn_1rm + calc_dl_1rm
     
-    # Przeliczenie na KG do systemów punktacji
+    # Conversion to KG for scoring systems
     calc_bw_kg = calc_bw / 2.20462 if use_lbs else calc_bw
     calc_tot_kg = calc_total / 2.20462 if use_lbs else calc_total
     
