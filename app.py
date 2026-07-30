@@ -470,9 +470,6 @@ def render_athlete_selectbox(label, key, _data):
     search_term = st.text_input(f"{label} (min. 3 characters):", key=search_key)
     
     options = []
-    # Keep the previous selection (e.g., from URL or previous search)
-    if current_val:
-        options.append(current_val)
         
     # If user types at least 3 characters, query the database
     if search_term and len(search_term) >= 3:
@@ -481,11 +478,13 @@ def render_athlete_selectbox(label, key, _data):
             # ILIKE ensures case-insensitive search
             res = conn.execute("SELECT DISTINCT Name FROM clean_db WHERE Name ILIKE ? ORDER BY Name LIMIT 100", [f"%{search_term}%"]).df()
             if not res.empty:
-                for n in res['Name'].tolist():
-                    if n not in options:
-                        options.append(n)
+                options.extend(res['Name'].tolist())
         except Exception:
             pass
+            
+    # Keep the previous selection (e.g., from URL or previous search)
+    if current_val and current_val != "Type above to search..." and current_val not in options:
+        options.insert(0, current_val)
     
     # Step 2: Selectbox limited to search results (safe for Streamlit)
     if options:
@@ -661,7 +660,7 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
         
         if divide_by_age:
             def get_age_group(age):
-                if pd.isna(age): return "Unknown"
+                if pd.isna(age) or age == 0: return "Unknown"
                 if age <= 18: return "Subjunior"
                 elif age <= 23: return "Junior"
                 elif age <= 39: return "Open"
@@ -942,7 +941,7 @@ def fetch_athlete_data(name, _data):
         df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce')
         df_res['CareerStart'] = pd.to_datetime(df_res['CareerStart'], errors='coerce')
         df_res['LongevityToMeet'] = (df_res['Date'] - df_res['CareerStart']).dt.days / 365.25
-        df_res['EstBirthYear'] = df_res['Date'].dt.year - df_res['Age'] # NEW: Estimated birth year
+        df_res['EstBirthYear'] = df_res['Date'].dt.year - df_res['Age']
         df_res.rename(columns={
             "TotalKg": "Total", "Best3SquatKg": "Squat", "Best3BenchKg": "Bench", 
             "Best3DeadliftKg": "Deadlift", "BodyweightKg": "Bodyweight", 
@@ -1055,7 +1054,6 @@ elif analysis_mode == "Athlete vs athlete":
 
 elif analysis_mode == "Competition Analysis":
     st.markdown("## Competition Analysis")
-    # Instead of passing `value`, we just use the `key` to resolve session state conflicts
     comp_search = st.text_input("Search Competition Name (Type at least 3 characters):", key="comp_search_val")
     
     if comp_search and len(comp_search) >= 3:
@@ -1381,10 +1379,10 @@ elif analysis_mode == "Athlete vs athlete":
             if agg == "median": return df_stat[col].median()
             return df_stat[col].max() if agg=="max" else df_stat[col].min()
         
-            col1, col2, col3 = st.columns(3)
-            col1.markdown(f"### {name_a}")
-            col2.markdown("### Metric")
-            col3.markdown(f"### {name_b}")
+        col1, col2, col3 = st.columns(3)
+        col1.markdown(f"### {name_a}")
+        col2.markdown("### Metric")
+        col3.markdown(f"### {name_b}")
         
         stats = [
             ("Est. Birth Year", "EstBirthYear", 1, "median"),
