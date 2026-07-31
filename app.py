@@ -1118,23 +1118,23 @@ elif analysis_mode == "Calculators":
 if st.session_state.submit_clicked:
     if analysis_mode in ["Group", "Result vs group"]:
         with st.spinner("Crunching data with DuckDB..."):
-            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req, df)
+            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
             st.session_state.cfg_a = st.session_state.cfg_a_req
             
     elif analysis_mode == "Athlete vs group":
         ath_name = st.session_state.get("ath_selected_vg")
         if ath_name and isinstance(ath_name, str):
             with st.spinner("Fetching athlete..."): 
-                st.session_state.ath_df = fetch_athlete_data(ath_name, df)
+                st.session_state.ath_df = fetch_athlete_data(ath_name)
         with st.spinner("Crunching group data..."):
-            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req, df)
+            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
             st.session_state.cfg_a = st.session_state.cfg_a_req
                 
     elif analysis_mode == "Group vs group":
         with st.spinner(f"Crunching {st.session_state.cfg_a_req['group_name']}..."): 
-            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req, df)
+            st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
         with st.spinner(f"Crunching {st.session_state.cfg_b_req['group_name']}..."): 
-            st.session_state.df_b = run_group_analysis(st.session_state.cfg_b_req, df)
+            st.session_state.df_b = run_group_analysis(st.session_state.cfg_b_req)
         st.session_state.cfg_a = st.session_state.cfg_a_req
         st.session_state.cfg_b = st.session_state.cfg_b_req
 
@@ -1142,23 +1142,23 @@ if st.session_state.submit_clicked:
         ath_name = st.session_state.get("ath_selected")
         if ath_name and isinstance(ath_name, str):
             with st.spinner("Fetching athlete..."): 
-                st.session_state.ath_df = fetch_athlete_data(ath_name, df)
+                st.session_state.ath_df = fetch_athlete_data(ath_name)
 
     elif analysis_mode == "Athlete vs athlete":
         a_name = st.session_state.get("ath_a_sel")
         b_name = st.session_state.get("ath_b_sel")
         if a_name and isinstance(a_name, str) and b_name and isinstance(b_name, str):
             with st.spinner("Fetching Athlete A..."): 
-                st.session_state.ath_df_a = fetch_athlete_data(a_name, df)
+                st.session_state.ath_df_a = fetch_athlete_data(a_name)
             with st.spinner("Fetching Athlete B..."): 
-                st.session_state.ath_df_b = fetch_athlete_data(b_name, df)
+                st.session_state.ath_df_b = fetch_athlete_data(b_name)
             
     elif analysis_mode == "Competition Analysis":
         sel_comp = st.session_state.get("sel_comp")
         sel_year = st.session_state.get("sel_comp_year")
         if sel_comp:
             with st.spinner("Fetching competition data..."):
-                conn = get_connection(df)
+                conn = get_duckdb_connection()
                 if sel_year and sel_year != "All Years (Compare)":
                     df_comp = conn.execute("SELECT * FROM clean_db WHERE MeetName = ? AND extract(year from Date) = ?", [sel_comp, int(sel_year)]).df()
                     comp_display_name = f"{sel_comp} ({sel_year})"
@@ -1182,7 +1182,7 @@ if st.session_state.submit_clicked:
                     st.session_state.df_comp = df_comp
                     st.session_state.comp_name = comp_display_name
 
-    st.session_state.submit_clicked = False 
+    st.session_state.submit_clicked = False
 
 
 show_analysis = False
