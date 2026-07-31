@@ -18,17 +18,44 @@ st.set_page_config(
 )
 DATA_URL = "https://github.com/PawelWyrodek/PowerliftingCompare/releases/download/latest-data/openpowerlifting.parquet"
 
-# Używamy cache'owania, żeby aplikacja nie pobierała pliku przy każdym kliknięciu
-@st.cache_data
-def load_data():
+@st.cache_resource
+def get_duckdb_connection():
     conn = duckdb.connect()
-    # DuckDB odpytuje zdalny plik parquet w locie
-    query = f"SELECT * FROM read_parquet('{DATA_URL}')"
-    df = conn.execute(query).df()
-    return df
-
-# Wywołanie w kodzie:
-df = load_data()
+    # Wymagane do czytania plików parquet bezpośrednio z HTTPS
+    conn.execute("INSTALL httpfs;")
+    conn.execute("LOAD httpfs;")
+    
+    # Tworzymy widok bezpośrednio nad zdalnym plikiem Parquet bez ładowania do RAM-u Pandy
+    conn.execute(f"""
+        CREATE OR REPLACE VIEW clean_db AS
+        SELECT * REPLACE (
+            TRY_CAST(Date AS DATE) as Date,
+            TRY_CAST(Age AS DOUBLE) as Age,
+            TRY_CAST(BodyweightKg AS DOUBLE) as BodyweightKg,
+            TRY_CAST(Best3SquatKg AS DOUBLE) as Best3SquatKg,
+            TRY_CAST(Best3BenchKg AS DOUBLE) as Best3BenchKg,
+            TRY_CAST(Best3DeadliftKg AS DOUBLE) as Best3DeadliftKg,
+            TRY_CAST(TotalKg AS DOUBLE) as TotalKg,
+            TRY_CAST(Dots AS DOUBLE) as Dots,
+            TRY_CAST(Wilks AS DOUBLE) as Wilks,
+            TRY_CAST(Squat1Kg AS DOUBLE) as Squat1Kg,
+            TRY_CAST(Squat2Kg AS DOUBLE) as Squat2Kg,
+            TRY_CAST(Squat3Kg AS DOUBLE) as Squat3Kg,
+            TRY_CAST(Bench1Kg AS DOUBLE) as Bench1Kg,
+            TRY_CAST(Bench2Kg AS DOUBLE) as Bench2Kg,
+            TRY_CAST(Bench3Kg AS DOUBLE) as Bench3Kg,
+            TRY_CAST(Deadlift1Kg AS DOUBLE) as Deadlift1Kg,
+            TRY_CAST(Deadlift2Kg AS DOUBLE) as Deadlift2Kg,
+            TRY_CAST(Deadlift3Kg AS DOUBLE) as Deadlift3Kg
+        ),
+        CASE WHEN Sex = 'M' THEN
+            TRY_CAST(TotalKg AS DOUBLE) * 100.0 / (1199.72839 - 925.40462 * EXP(-0.00510531 * TRY_CAST(BodyweightKg AS DOUBLE)))
+        WHEN Sex = 'F' THEN
+            TRY_CAST(TotalKg AS DOUBLE) * 100.0 / (610.79046 - 451.04414 * EXP(-0.00735665 * TRY_CAST(BodyweightKg AS DOUBLE)))
+        ELSE NULL END as GLPoints
+        FROM read_parquet('{DATA_URL}');
+    """)
+    return conn
 st.markdown("""
     <style>
         div[data-testid="InputInstructions"] { display: none !important; }
@@ -97,7 +124,7 @@ def sort_weight_class(value):
 # DUCKDB CONNECTION & DATA WASHER
 # ---------------------------------------------------------------------------
 @st.cache_resource
-def get_connection(_data):
+def get_duckdb_connection(_data):
     conn = duckdb.connect()
     
     # Register the loaded Pandas DataFrame directly instead of using a SQLite file
@@ -135,7 +162,7 @@ def get_connection(_data):
     return conn
 
 @st.cache_data
-def load_countries_and_continents(_data):
+def load_countries_and_continents():
     default_continents = {
         "Africa": ["Niger", "Nigeria", "South Africa", "Egypt", "Algeria", "Morocco", "Ghana", "Cameroon", "Zimbabwe", "Kenya", "Senegal"],
         "Asia": ["Japan", "Kazakhstan", "China", "India", "Iran", "Taiwan", "South Korea", "Mongolia", "Singapore", "Malaysia", "Philippines", "Indonesia", "UAE"],
@@ -145,7 +172,7 @@ def load_countries_and_continents(_data):
         "South America": ["Brazil", "Argentina", "Chile", "Colombia", "Peru", "Ecuador", "Venezuela", "Uruguay"]
     }
     try:
-        conn = get_connection(_data)
+        conn = get_duckdb_connection()
         df_db = conn.execute("SELECT DISTINCT Country FROM clean_db WHERE Country IS NOT NULL").df()
         db_countries = sorted([str(c).strip() for c in df_db['Country'].dropna().unique() if str(c).strip()])
     except Exception:
@@ -168,9 +195,9 @@ def load_countries_and_continents(_data):
     return display_countries, country_to_continent
 
 @st.cache_data
-def load_federations(_data):
+def load_federations():
     try:
-        conn = get_connection(_data)
+        conn = get_duckdb_connection()
         feds_df = conn.execute("SELECT DISTINCT Federation, ParentFederation FROM clean_db WHERE Federation IS NOT NULL").df()
         feds_list = sorted(feds_df['Federation'].dropna().unique().tolist())
         parent_feds_list = sorted(feds_df['ParentFederation'].dropna().unique().tolist())
@@ -180,10 +207,10 @@ def load_federations(_data):
         return [], [], {}
 
 @st.cache_data
-def load_weight_class_options(_data):
+def load_weight_class_options():
     popular_classes = ('43', '44', '47', '48', '52', '53', '56', '57', '59', '60', '63', '66', '67.5', '69', '74', '75', '76', '82.5', '83', '84', '84+', '90', '90+', '93', '100', '100+', '105', '110', '115', '120', '120+', '125', '140', '140+')
     try:
-        conn = get_connection(_data)
+        conn = get_duckdb_connection()
         placeholders = ",".join(["?"] * len(popular_classes))
         q = f"SELECT DISTINCT WeightClassKg FROM clean_db WHERE WeightClassKg IN ({placeholders})"
         df_db = conn.execute(q, popular_classes).df()
@@ -194,9 +221,10 @@ def load_weight_class_options(_data):
         return sorted(list(options), key=lambda x: sort_weight_class(x))
     except Exception: return []
 
-display_countries, country_to_continent = load_countries_and_continents(df)
-feds_list, parent_feds_list, fed_to_parent = load_federations(df)
-weight_class_options = load_weight_class_options(df)
+# Wywołania inicjalizujące bezargumentowe:
+display_countries, country_to_continent = load_countries_and_continents()
+feds_list, parent_feds_list, fed_to_parent = load_federations()
+weight_class_options = load_weight_class_options()
 
 METRIC_OPTIONS = ["Total", "Dots", "Wilks", "GL Points", "Squat", "Bench", "Deadlift", "Bodyweight", "Date"]
 METRIC_SQL_MAP = {
@@ -371,7 +399,7 @@ def build_query(cfg):
     return query, final_params
 
 def run_group_analysis(cfg, _data):
-    conn = get_connection(_data)
+    conn = get_duckdb_connection()
     query, params = build_query(cfg)
     df_res = conn.execute(query, params).df()
 
@@ -480,7 +508,7 @@ def render_athlete_selectbox(label, key, _data):
     # If user types at least 3 characters, query the database
     if search_term and len(search_term) >= 3:
         try:
-            conn = get_connection(_data)
+            conn = get_duckdb_connection()
             # ILIKE ensures case-insensitive search
             res = conn.execute("SELECT DISTINCT Name FROM clean_db WHERE Name ILIKE ? ORDER BY Name LIMIT 100", [f"%{search_term}%"]).df()
             if not res.empty:
@@ -933,7 +961,7 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
     render_dataframe(df_display[display_cols], key_prefix=f"{cfg['group_name']}_l", set_index="Rank" if "Rank" in display_cols else None)
 
 def fetch_athlete_data(name, _data):
-    conn = get_connection(_data)
+    conn = get_duckdb_connection()
     q = """
         SELECT p.*,
                ROW_NUMBER() OVER(PARTITION BY p.Name, IFNULL(p.Country, '') ORDER BY p.Date) as MeetNum,
