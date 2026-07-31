@@ -11,17 +11,23 @@ import urllib.parse
 # ---------------------------------------------------------------------------
 # PAGE CONFIGURATION
 # ---------------------------------------------------------------------------
-DATA_URL ="https://github.com/PawelWyrodek/PowerliftingCompare/releases/download/latest-data/openpowerlifting.parquet"
-st.set_page_config(page_title="Performance Engine", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="Powerlifting Compare",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+DATA_URL = "https://github.com/PawelWyrodek/PowerliftingCompare/releases/download/latest-data/openpowerlifting.parquet"
 
-# Cache refreshes once a day
-@st.cache_data(ttl="1d")
+# Używamy cache'owania, żeby aplikacja nie pobierała pliku przy każdym kliknięciu
+@st.cache_data
 def load_data():
-    return pd.read_parquet(DATA_URL)
+    conn = duckdb.connect()
+    # DuckDB odpytuje zdalny plik parquet w locie
+    query = f"SELECT * FROM read_parquet('{DATA_URL}')"
+    df = conn.execute(query).df()
+    return df
 
-st.title("Powerlifting Performance Comparison")
-
-# Load data
+# Wywołanie w kodzie:
 df = load_data()
 st.markdown("""
     <style>
