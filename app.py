@@ -4,7 +4,7 @@ import duckdb
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import date
+from datetime import date, timedelta
 import re
 import urllib.parse
 
@@ -528,9 +528,9 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
         date_preset = st.selectbox("Date", ["Any", "Last week", "Last month", "Last year", "Custom"], key=f"{prefix}_date_preset", label_visibility="collapsed")
         today = date.today()
         if date_preset == "Any": start_date, end_date = "1970-01-01", today.strftime("%Y-%m-%d")
-        elif date_preset == "Last week": start_date, end_date = (today - pd.Timedelta(days=7)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-        elif date_preset == "Last month": start_date, end_date = (today - pd.Timedelta(days=30)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-        elif date_preset == "Last year": start_date, end_date = (today - pd.Timedelta(days=365)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "Last week": start_date, end_date = (today - timedelta(days=7)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "Last month": start_date, end_date = (today - timedelta(days=30)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "Last year": start_date, end_date = (today - timedelta(days=365)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
         else:
             st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Custom date range</span>", unsafe_allow_html=True)
             date_range = st.date_input("Custom date range", value=(date(1970, 1, 1), today), key=f"{prefix}_date_custom", label_visibility="collapsed")
@@ -667,7 +667,7 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
                 else: return "Masters"
                 
             valid_df['Age_Bin'] = valid_df['Age'].apply(get_age_group)
-            grouped = valid_df.groupby(['WeightClass', 'Age_Bin'], observed=True)
+            grouped = valid_df.groupby(['WeightClass', 'Age_Bin'])
             for (wc, age_bin), group in grouped:
                 if group.empty: continue
                 q_vals = group[target_metric].quantile(quantiles)
