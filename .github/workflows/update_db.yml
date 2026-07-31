@@ -31,3 +31,11 @@ jobs:
           files: openpowerlifting.parquet
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Commit and push data
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add *.parquet  # Zmień rozszerzenie, jeśli zapisujesz jako .csv
+          git commit -m "Auto-update powerlifting data" || echo "No changes to commit"
+          git push
