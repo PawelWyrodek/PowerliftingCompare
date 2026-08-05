@@ -1053,7 +1053,7 @@ elif analysis_mode == "Result vs group":
 
 elif analysis_mode == "Athlete vs group":
     st.markdown("**Select Athlete**")
-    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected_vg", df)
+    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected_vg", None)
     st.markdown("---")
     cfg_g = render_group_filters("avg", "Reference Group", default_countries=[])
     if st.button("Run Analysis", use_container_width=True):
@@ -1073,14 +1073,14 @@ elif analysis_mode == "Group vs group":
         st.session_state.cfg_b_req = cfg_b
 
 elif analysis_mode == "Athlete":
-    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected", df)
+    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected", None)
     if st.button("Run Analysis", use_container_width=True):
         st.session_state.submit_clicked = True
 
 elif analysis_mode == "Athlete vs athlete":
     col_s1, col_s2 = st.columns(2)
-    with col_s1: render_athlete_selectbox("Select Athlete A:", "ath_a_sel", df)
-    with col_s2: render_athlete_selectbox("Select Athlete B:", "ath_b_sel", df)
+    with col_s1: render_athlete_selectbox("Select Athlete A:", "ath_a_sel", None)
+    with col_s2: render_athlete_selectbox("Select Athlete B:", "ath_b_sel", None)
         
     vs_event_opt = st.selectbox("Compare Lift Type (Event):", ["Any", "SBD", "S", "B", "D", "SB", "BD", "SD"], index=0)
     if st.button("Run Analysis", use_container_width=True):
