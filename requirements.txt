@@ -5,3 +5,4 @@ numpy>=1.24.0
 plotly>=5.18.0
 statsmodels>=0.14.0
 fsspec
+starlette<0.38.0
