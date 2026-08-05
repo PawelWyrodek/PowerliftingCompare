@@ -124,14 +124,15 @@ def sort_weight_class(value):
 # DUCKDB CONNECTION & DATA WASHER
 # ---------------------------------------------------------------------------
 @st.cache_resource
-def get_duckdb_connection(_data):
+def get_duckdb_connection():
     conn = duckdb.connect()
+    # Wymagane do czytania plików parquet bezpośrednio z HTTPS
+    conn.execute("INSTALL httpfs;")
+    conn.execute("LOAD httpfs;")
     
-    # Register the loaded Pandas DataFrame directly instead of using a SQLite file
-    conn.register("main_db_powerlifting", _data)
-    
-    conn.execute("""
-        CREATE OR REPLACE TEMPORARY VIEW clean_db AS
+    # Tworzymy widok bezpośrednio nad zdalnym plikiem Parquet bez ładowania do RAM-u Pandy
+    conn.execute(f"""
+        CREATE OR REPLACE VIEW clean_db AS
         SELECT * REPLACE (
             TRY_CAST(Date AS DATE) as Date,
             TRY_CAST(Age AS DOUBLE) as Age,
@@ -157,7 +158,7 @@ def get_duckdb_connection(_data):
         WHEN Sex = 'F' THEN
             TRY_CAST(TotalKg AS DOUBLE) * 100.0 / (610.79046 - 451.04414 * EXP(-0.00735665 * TRY_CAST(BodyweightKg AS DOUBLE)))
         ELSE NULL END as GLPoints
-        FROM main_db_powerlifting;
+        FROM read_parquet('{DATA_URL}');
     """)
     return conn
 
