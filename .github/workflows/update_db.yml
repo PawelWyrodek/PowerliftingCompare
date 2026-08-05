@@ -5,15 +5,18 @@ on:
     - cron: '0 0 * * 0' # Uruchamiaj co niedzielę o 00:00
   workflow_dispatch: # Pozwala też uruchomić ręcznie z przycisku w GitHubie
 
+permissions:
+  contents: write # Wymagane, aby Workflow mógł tworzyć i aktualizować Releases
+
 jobs:
   update-db:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Konfiguracja Pythona
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -24,18 +27,10 @@ jobs:
         run: python update_data.py
 
       - name: Publikacja pliku w GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-data
           name: Latest OpenPowerlifting Data
           files: openpowerlifting.parquet
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Commit and push data
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add *.parquet  # Zmień rozszerzenie, jeśli zapisujesz jako .csv
-          git commit -m "Auto-update powerlifting data" || echo "No changes to commit"
-          git push
