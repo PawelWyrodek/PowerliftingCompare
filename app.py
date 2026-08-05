@@ -961,7 +961,7 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
     
     render_dataframe(df_display[display_cols], key_prefix=f"{cfg['group_name']}_l", set_index="Rank" if "Rank" in display_cols else None)
 
-def fetch_athlete_data(name, _data):
+def fetch_athlete_data(name):
     conn = get_duckdb_connection()
     q = """
         SELECT p.*,
