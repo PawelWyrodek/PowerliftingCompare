@@ -398,7 +398,7 @@ def build_query(cfg):
     final_params = base_params + base_params + filtered_params
     return query, final_params
 
-def run_group_analysis(cfg, _data):
+def run_group_analysis(cfg):
     conn = get_duckdb_connection()
     query, params = build_query(cfg)
     df_res = conn.execute(query, params).df()
