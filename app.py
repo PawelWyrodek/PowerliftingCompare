@@ -1091,7 +1091,7 @@ elif analysis_mode == "Competition Analysis":
     comp_search = st.text_input("Search Competition Name (Type at least 3 characters):", key="comp_search_val")
     
     if comp_search and len(comp_search) >= 3:
-        conn = get_connection(df)
+        conn = get_duckdb_connection()
         comps_df = conn.execute("SELECT DISTINCT MeetName FROM clean_db WHERE MeetName ILIKE ?", [f"%{comp_search}%"]).df()
         if comps_df is not None and not comps_df.empty:
             comp_list = sorted(comps_df['MeetName'].dropna().unique().tolist())
