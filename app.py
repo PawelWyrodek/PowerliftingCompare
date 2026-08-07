@@ -659,6 +659,15 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
         metric=metric_label, top_n=top_n_val
     )
 
+def format_wc(val, u):
+    if isinstance(val, str) and not val.replace('.', '', 1).isdigit():
+        return f"{val} {u}" # Obejmuje "120+", "All" itp.
+    try:
+        f_val = float(val)
+        return f"{int(f_val)} {u}" if f_val % 1 == 0 else f"{f_val} {u}"
+    except (ValueError, TypeError):
+        return f"{val} {u}"
+
 def render_strength_standards(df_src, cfg, exact_bw_target=None):
     with st.expander(f"{cfg['group_name']} Strength Standards", expanded=False):
         st.markdown("Standards are generated based on the currently filtered metric (greater than 0) inside the chosen group time range and filters.")
@@ -738,7 +747,7 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
                 q_vals = group[target_metric].quantile(quantiles)
                 if len(q_vals) < 5: continue
                 results.append({
-                    "Weight Class": f"{int(wc) if wc%1==0 else wc} {unit}",
+                    "Weight Class": format_wc(wc, unit),
                     "Age Group": str(age_bin),
                     "Beginner": q_vals.iloc[0] * mult,
                     "Novice": q_vals.iloc[1] * mult,
@@ -762,7 +771,7 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
                 q_vals = group[target_metric].quantile(quantiles)
                 if len(q_vals) < 5: continue
                 results.append({
-                    "Weight Class": f"{int(wc) if wc%1==0 else wc} {unit}",
+                    "Weight Class": format_wc(wc, unit),
                     "Beginner": q_vals.iloc[0] * mult,
                     "Novice": q_vals.iloc[1] * mult,
                     "Intermediate": q_vals.iloc[2] * mult,
