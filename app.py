@@ -1174,38 +1174,7 @@ if st.session_state.submit_clicked:
             st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
             st.session_state.cfg_a = st.session_state.cfg_a_req
 
-    elif calc_mode == "Reverse Calculator (Target Points to Lifts)":
-    # Domyślne wartości z klawiatury dla punktacji
-    col_pts1, col_pts2, col_pts3 = st.columns(3)
-    target_gl = col_pts1.number_input("Target GL Points", value=100.0, step=1.0)
-    target_dots = col_pts2.number_input("Target Dots", value=400.0, step=1.0)
-    target_wilks = col_pts3.number_input("Target Wilks", value=400.0, step=1.0)
-
-    st.markdown("### Proporcje bojów (Suma musi wynosić 100%)")
     
-    # Range slider z dwoma uchwytami dzieli pasek na 3 strefy: (0 do A), (A do B), (B do 100)
-    splits = st.slider(
-        "Suwak proporcji S / B / D", 
-        min_value=0, max_value=100, 
-        value=(35, 60), 
-        step=1, 
-        label_visibility="collapsed"
-    )
-    
-    # Przeliczamy uchwyty na procenty dla poszczególnych bojów
-    def_sq = splits[0]
-    def_bn = splits[1] - splits[0]
-    def_dl = 100 - splits[1]
-
-    # Użytkownik nadal może wpisać z klawiatury (Streamlit sam to zaktualizuje w UI, choć suwak zostaje jako "pomocniczy")
-    c1, c2, c3 = st.columns(3)
-    pct_sq = c1.number_input("Squat (%)", min_value=0, max_value=100, value=def_sq)
-    pct_bn = c2.number_input("Bench (%)", min_value=0, max_value=100, value=def_bn)
-    pct_dl = c3.number_input("Deadlift (%)", min_value=0, max_value=100, value=def_dl)
-    
-    if (pct_sq + pct_bn + pct_dl) != 100:
-        st.warning(f"Suma proporcji wynosi {pct_sq + pct_bn + pct_dl}%. Zmodyfikuj pola, aby uzyskać dokładnie 100%.")
-        
     elif analysis_mode == "Athlete vs group":
         ath_name = st.session_state.get("ath_selected_vg")
         if ath_name and isinstance(ath_name, str):
@@ -1615,97 +1584,45 @@ elif analysis_mode == "Competition" and st.session_state.get("df_comp") is not N
     render_competition_section(df_filtered, {"group_name": st.session_state.comp_name})
 
 elif analysis_mode == "Calculators":
-    st.header("Formulas Point Calculator", anchor=False)
+    st.header("Calculators & Strength Standards")
     
-    calc_mode = st.radio("Mode", ["Calculate Points", "Reverse Calculator (Target Points to Lifts)"], horizontal=True)
+    calc_mode = st.selectbox(
+        "Select Calculator Tool",
+        ["Reverse Calculator (Target Points to Lifts)", "Strength Standards & Estimation"]
+    )
     
-    if calc_mode == "Calculate Points":
-        cc1, cc2, cc3 = st.columns(3)
-        with cc1:
-            calc_sex = st.selectbox("Biological Sex", ["M", "F"])
-            calc_bw = st.number_input(f"Bodyweight ({unit})", min_value=1.0, value=80.0, step=0.5)
-        with cc2:
-            c2a, c2b = st.columns(2)
-            calc_sq_w = c2a.number_input(f"Squat ({unit})", min_value=0.0, value=150.0, step=2.5)
-            calc_sq_r = c2b.number_input("Squat Reps", value=1, min_value=1)
-            if calc_sq_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_sq_w, calc_sq_r):.1f} {unit}")
+    if calc_mode == "Reverse Calculator (Target Points to Lifts)":
+        st.markdown("### Reverse Calculator")
+        
+        # Default target scores from keyboard inputs
+        col_pts1, col_pts2, col_pts3 = st.columns(3)
+        target_gl = col_pts1.number_input("Target GL Points", value=100.0, step=1.0)
+        target_dots = col_pts2.number_input("Target Dots", value=400.0, step=1.0)
+        target_wilks = col_pts3.number_input("Target Wilks", value=400.0, step=1.0)
+
+        st.markdown("### Lift Proportions (Sum must equal 100%)")
+        
+        # Range slider with two handles splits the bar into 3 zones: (0 to A), (A to B), (B to 100)
+        splits = st.slider(
+            "Lift proportions slider S / B / D", 
+            min_value=0, max_value=100, 
+            value=(35, 60), 
+            step=1, 
+            label_visibility="collapsed"
+        )
+        
+        def_sq = splits[0]
+        def_bn = splits[1] - splits[0]
+        def_dl = 100 - splits[1]
+
+        c1, c2, c3 = st.columns(3)
+        pct_sq = c1.number_input("Squat (%)", min_value=0, max_value=100, value=def_sq)
+        pct_bn = c2.number_input("Bench (%)", min_value=0, max_value=100, value=def_bn)
+        pct_dl = c3.number_input("Deadlift (%)", min_value=0, max_value=100, value=def_dl)
+        
+        if (pct_sq + pct_bn + pct_dl) != 100:
+            st.warning(f"The sum of proportions is {pct_sq + pct_bn + pct_dl}%. Please adjust the fields to total exactly 100%.")
             
-            c3a, c3b = st.columns(2)
-            calc_bn_w = c3a.number_input(f"Bench ({unit})", min_value=0.0, value=100.0, step=2.5)
-            calc_bn_r = c3b.number_input("Bench Reps", value=1, min_value=1)
-            if calc_bn_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_bn_w, calc_bn_r):.1f} {unit}")
-            
-            c4a, c4b = st.columns(2)
-            calc_dl_w = c4a.number_input(f"Deadlift ({unit})", min_value=0.0, value=200.0, step=2.5)
-            calc_dl_r = c4b.number_input("Deadlift Reps", value=1, min_value=1)
-            if calc_dl_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_dl_w, calc_dl_r):.1f} {unit}")
-            
-        calc_sq_1rm = calc_1rm(calc_sq_w, calc_sq_r)
-        calc_bn_1rm = calc_1rm(calc_bn_w, calc_bn_r)
-        calc_dl_1rm = calc_1rm(calc_dl_w, calc_dl_r)
-        calc_total = calc_sq_1rm + calc_bn_1rm + calc_dl_1rm
-        
-        calc_bw_kg = calc_bw / 2.20462 if use_lbs else calc_bw
-        calc_tot_kg = calc_total / 2.20462 if use_lbs else calc_total
-        
-        dots_score = calc_tot_kg * (500.0 / (-0.000001093 * (calc_bw_kg ** 4) + 0.0007391293 * (calc_bw_kg ** 3) -0.1918759221 * (calc_bw_kg ** 2) + 24.0900756 * calc_bw_kg - 307.75076)) if calc_sex=="M" else calc_tot_kg * (500.0 / (-0.000010706 * (calc_bw_kg ** 4) + 0.005158568 * (calc_bw_kg ** 3) -0.92501065 * (calc_bw_kg ** 2) + 75.323049 * calc_bw_kg - 516.39869))
-        
-        if calc_sex == "M":
-            denom = -216.0475144 + 16.2606339*calc_bw_kg -0.002388645*(calc_bw_kg**2) -0.00113732*(calc_bw_kg**3) + 7.01863E-06*(calc_bw_kg**4) -1.291E-08*(calc_bw_kg**5)
-        else:
-            denom = 594.3174777 -27.23842536*calc_bw_kg + 0.821122268*(calc_bw_kg**2) -0.009307339*(calc_bw_kg**3) + 4.73158E-05*(calc_bw_kg**4) -9.054E-08*(calc_bw_kg**5)
-        wilks_score = calc_tot_kg * (500.0 / denom) if denom != 0 else 0
-        
-        gl_denom = (1199.72839 - 925.40462 * np.exp(-0.00510531 * calc_bw_kg)) if calc_sex=="M" else (610.79046 - 451.04414 * np.exp(-0.00735665 * calc_bw_kg))
-        gl_score = calc_tot_kg * (100.0 / gl_denom) if gl_denom != 0 else 0
-        
-        st.markdown("---")
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric(f"Total ({unit})", f"{calc_total:.1f}")
-        sc2.metric("DOTS", f"{dots_score:.2f}")
-        sc3.metric("Wilks", f"{wilks_score:.2f}")
-        sc4.metric("GL Points", f"{gl_score:.2f}")
-        
-    else:
-        cc1, cc2, cc3 = st.columns(3)
-        with cc1:
-            calc_sex = st.selectbox("Biological Sex", ["M", "F"], key="rev_sex")
-            calc_bw = st.number_input(f"Bodyweight ({unit})", min_value=1.0, value=80.0, step=0.5, key="rev_bw")
-        with cc2:
-            target_sys = st.selectbox("Target Metric", ["GL Points", "Dots", "Wilks", "Total"], key="rev_sys")
-            target_score = st.number_input("Target Score", min_value=0.0, value=400.0, step=5.0)
-        with cc3:
-            lift_event = st.selectbox("Lift Event (Distribute Total)", ["SBD", "S", "B", "D", "SB", "BD", "SD"], key="rev_event")
-            
-        st.markdown("**Lift Proportions (%)**")
-        p_c1, p_c2, p_c3 = st.columns(3)
-        with p_c1: prop_sq = st.number_input("Squat %", value=35.0 if "S" in lift_event else 0.0, disabled="S" not in lift_event)
-        with p_c2: prop_bn = st.number_input("Bench %", value=25.0 if "B" in lift_event else 0.0, disabled="B" not in lift_event)
-        with p_c3: prop_dl = st.number_input("Deadlift %", value=40.0 if "D" in lift_event else 0.0, disabled="D" not in lift_event)
-        
-        tot_prop = prop_sq + prop_bn + prop_dl
-        if tot_prop == 0:
-            st.warning("Proportions must sum to > 0")
-        else:
-            calc_bw_kg = calc_bw / 2.20462 if use_lbs else calc_bw
-            
-            if target_sys == "Total":
-                req_total_kg = target_score / 2.20462 if use_lbs else target_score
-            else:
-                if target_sys == "Dots":
-                    coeff = (500.0 / (-0.000001093 * (calc_bw_kg ** 4) + 0.0007391293 * (calc_bw_kg ** 3) -0.1918759221 * (calc_bw_kg ** 2) + 24.0900756 * calc_bw_kg - 307.75076)) if calc_sex=="M" else (500.0 / (-0.000010706 * (calc_bw_kg ** 4) + 0.005158568 * (calc_bw_kg ** 3) -0.92501065 * (calc_bw_kg ** 2) + 75.323049 * calc_bw_kg - 516.39869))
-                elif target_sys == "Wilks":
-                    denom = -216.0475144 + 16.2606339*calc_bw_kg -0.002388645*(calc_bw_kg**2) -0.00113732*(calc_bw_kg**3) + 7.01863E-06*(calc_bw_kg**4) -1.291E-08*(calc_bw_kg**5) if calc_sex == "M" else 594.3174777 -27.23842536*calc_bw_kg + 0.821122268*(calc_bw_kg**2) -0.009307339*(calc_bw_kg**3) + 4.73158E-05*(calc_bw_kg**4) -9.054E-08*(calc_bw_kg**5)
-                    coeff = 500.0 / denom if denom != 0 else 1
-                elif target_sys == "GL Points":
-                    denom = (1199.72839 - 925.40462 * np.exp(-0.00510531 * calc_bw_kg)) if calc_sex=="M" else (610.79046 - 451.04414 * np.exp(-0.00735665 * calc_bw_kg))
-                    coeff = 100.0 / denom if denom != 0 else 1
-                req_total_kg = target_score / coeff if coeff != 0 else 0
-                
-            req_total_disp = req_total_kg * (2.20462 if use_lbs else 1.0)
-            
-            st.success(f"**Required Total for {target_score} {target_sys}:** {req_total_disp:.1f} {unit}")
-            rc1, rc2, rc3 = st.columns(3)
-            if "S" in lift_event: rc1.metric("Required Squat", f"{(req_total_disp * prop_sq / tot_prop):.1f} {unit}")
-            if "B" in lift_event: rc2.metric("Required Bench", f"{(req_total_disp * prop_bn / tot_prop):.1f} {unit}")
-            if "D" in lift_event: rc3.metric("Required Deadlift", f"{(req_total_disp * prop_dl / tot_prop):.1f} {unit}")
+    elif calc_mode == "Strength Standards & Estimation":
+        st.markdown("### Strength Standards")
+        st.info("Evaluate your performance against standard powerlifting classifications.")
