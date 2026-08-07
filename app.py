@@ -400,6 +400,7 @@ def build_query(cfg):
     return query, final_params
 
 def run_group_analysis(cfg):
+    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     conn = get_duckdb_connection()
     query, params = build_query(cfg)
     df_res = conn.execute(query, params).df()
@@ -623,11 +624,15 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
     c4, c5, c6 = st.columns(3)
     with c4:
         st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Weight classes Preset</span>", unsafe_allow_html=True)
-        wc_preset = st.radio("Preset", ["Custom", "All Men", "All Women"], key=f"{prefix}_wc_preset", horizontal=True, label_visibility="collapsed")
+        wc_preset = st.radio("Preset", ["All", "All Men", "All Women"], key=f"{prefix}_wc_preset", horizontal=True, label_visibility="collapsed")
         
-        if wc_preset == "All Men" or sex == "M":
+        if wc_preset == "All Men":
             wco = [w for w in wco if w in ['52', '53', '56', '59', '60', '63', '66', '67.5', '69', '74', '75', '76', '82.5', '83', '90', '93', '100', '105', '110', '115', '120', '120+', '125', '140', '140+']]
-        elif wc_preset == "All Women" or sex == "F":
+        elif wc_preset == "All Women":
+            wco = [w for w in wco if w in ['43', '44', '47', '48', '52', '53', '56', '57', '60', '63', '67.5', '69', '75', '76', '82.5', '83', '84', '84+', '90', '90+']]
+        elif sex == "M": 
+            wco = [w for w in wco if w in ['52', '53', '56', '59', '60', '63', '66', '67.5', '69', '74', '75', '76', '82.5', '83', '90', '93', '100', '105', '110', '115', '120', '120+', '125', '140', '140+']]
+        elif sex == "F":
             wco = [w for w in wco if w in ['43', '44', '47', '48', '52', '53', '56', '57', '60', '63', '67.5', '69', '75', '76', '82.5', '83', '84', '84+', '90', '90+']]
             
         if wc_preset == "All Men": default_wc = wco
@@ -1005,6 +1010,7 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
     render_dataframe(df_display[display_cols], key_prefix=f"{cfg['group_name']}_l", set_index="Rank" if "Rank" in display_cols else None)
 
 def fetch_athlete_data(name):
+    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     conn = get_duckdb_connection()
     q = """
         SELECT p.*,
@@ -1032,7 +1038,10 @@ def fetch_athlete_data(name):
 def apply_athlete_filters(df_src, key_prefix):
     filtered = df_src.copy()
     if filtered.empty: return filtered
-    
+
+    if 'Tested' in filtered.columns:
+        filtered['Tested'] = filtered['Tested'].fillna('No')
+
     st.markdown("#### Filter Athlete Career")
     cols = st.columns(4)
     filter_keys = ["WeightClass", "Equipment", "Tested", "Federation"]
@@ -1164,7 +1173,39 @@ if st.session_state.submit_clicked:
         with st.spinner("Crunching data with DuckDB..."):
             st.session_state.df_a = run_group_analysis(st.session_state.cfg_a_req)
             st.session_state.cfg_a = st.session_state.cfg_a_req
-            
+
+    elif calc_mode == "Reverse Calculator (Target Points to Lifts)":
+    # Domyślne wartości z klawiatury dla punktacji
+    col_pts1, col_pts2, col_pts3 = st.columns(3)
+    target_gl = col_pts1.number_input("Target GL Points", value=100.0, step=1.0)
+    target_dots = col_pts2.number_input("Target Dots", value=400.0, step=1.0)
+    target_wilks = col_pts3.number_input("Target Wilks", value=400.0, step=1.0)
+
+    st.markdown("### Proporcje bojów (Suma musi wynosić 100%)")
+    
+    # Range slider z dwoma uchwytami dzieli pasek na 3 strefy: (0 do A), (A do B), (B do 100)
+    splits = st.slider(
+        "Suwak proporcji S / B / D", 
+        min_value=0, max_value=100, 
+        value=(35, 60), 
+        step=1, 
+        label_visibility="collapsed"
+    )
+    
+    # Przeliczamy uchwyty na procenty dla poszczególnych bojów
+    def_sq = splits[0]
+    def_bn = splits[1] - splits[0]
+    def_dl = 100 - splits[1]
+
+    # Użytkownik nadal może wpisać z klawiatury (Streamlit sam to zaktualizuje w UI, choć suwak zostaje jako "pomocniczy")
+    c1, c2, c3 = st.columns(3)
+    pct_sq = c1.number_input("Squat (%)", min_value=0, max_value=100, value=def_sq)
+    pct_bn = c2.number_input("Bench (%)", min_value=0, max_value=100, value=def_bn)
+    pct_dl = c3.number_input("Deadlift (%)", min_value=0, max_value=100, value=def_dl)
+    
+    if (pct_sq + pct_bn + pct_dl) != 100:
+        st.warning(f"Suma proporcji wynosi {pct_sq + pct_bn + pct_dl}%. Zmodyfikuj pola, aby uzyskać dokładnie 100%.")
+        
     elif analysis_mode == "Athlete vs group":
         ath_name = st.session_state.get("ath_selected_vg")
         if ath_name and isinstance(ath_name, str):
