@@ -807,7 +807,7 @@ def render_competition_section(df_src, cfg):
         place_n = 1
         if agg_type == "Placement (Top N)":
             place_n = st.selectbox("Select Placement", [1, 2, 3, 4, 5, 6, 7, 8], key=f"{cfg['group_name']}_place_n")
-    diff_df = df_src.dropna(subset=['WeightClass', diff_metric]).copy()
+        diff_df = df_src.dropna(subset=['WeightClass', diff_metric]).copy()
         diff_df['WeightClass'] = diff_df['WeightClass'].astype(str)
         diff_df = diff_df[diff_df['WeightClass'].isin(load_weight_class_options())]
         
