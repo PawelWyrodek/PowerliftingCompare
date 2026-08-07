@@ -326,8 +326,8 @@ def build_query(cfg):
     filtered_where = "WHERE r.MeetNum BETWEEN ? AND ?"
     filtered_params += [cfg["meet_min"], cfg["meet_max"]]
     
-    filtered_where += " AND (r.Dots BETWEEN ? AND ? OR r.Dots IS NULL)"
-    filtered_params += [cfg["dots_min"], cfg["dots_max"]]
+    filtered_where += f" AND (r.{cfg['score_sys_filt']} BETWEEN ? AND ? OR r.{cfg['score_sys_filt']} IS NULL)"
+    filtered_params += [cfg["score_min"], cfg["score_max"]]
     
     filtered_where += " AND (date_diff('day', r.CareerStart::DATE, r.Date::DATE))/365.25 BETWEEN ? AND ?"
     filtered_params += [cfg["long_min"], cfg["long_max"]]
@@ -510,8 +510,11 @@ def render_athlete_selectbox(label, key, _data):
     if search_term and len(search_term) >= 3:
         try:
             conn = get_duckdb_connection()
-            # ILIKE ensures case-insensitive search
-            res = conn.execute("SELECT DISTINCT Name FROM clean_db WHERE Name ILIKE ? ORDER BY Name LIMIT 100", [f"%{search_term}%"]).df()
+            # Splituje słowa, żeby dało się znaleźć np. po samym imieniu lub wyrywkowo
+            search_terms = search_term.strip().split()
+            conditions = " AND ".join(["Name ILIKE ?" for _ in search_terms])
+            params = [f"%{t}%" for t in search_terms]
+            res = conn.execute(f"SELECT DISTINCT Name FROM clean_db WHERE {conditions} ORDER BY Name LIMIT 100", params).df()
             if not res.empty:
                 options.extend(res['Name'].tolist())
         except Exception:
@@ -538,9 +541,12 @@ mult = 2.20462262 if use_lbs else 1.0
 
 MODES = ["Result vs group", "Athlete vs group", "Group", "Group vs group", "Athlete", "Athlete vs athlete", "Competition Analysis", "Calculators"]
 
-analysis_mode = st.sidebar.radio("Select Analysis Mode", MODES, index=MODES.index(st.session_state.active_mode))
-st.session_state.active_mode = analysis_mode
-st.query_params["mode"] = analysis_mode 
+def change_mode():
+    st.session_state.active_mode = st.session_state._mode_radio
+    st.query_params["mode"] = st.session_state._mode_radio
+    st.session_state.submit_clicked = False
+
+analysis_mode = st.sidebar.radio("Select Analysis Mode", MODES, index=MODES.index(st.session_state.active_mode), key="_mode_radio", on_change=change_mode)
 
 def render_group_filters(prefix, default_label, default_sex="M", default_equip=None, default_countries=None):
     if default_equip is None:
@@ -590,7 +596,8 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
     with c1:
         a_min, a_max = numeric_range_input("Age Range", 1, 99, 18, 40, 1, prefix)
         w_min, w_max = numeric_range_input("Bodyweight Range", 0.0, 500.0, 0.0, 500.0, 0.5, prefix, slider_max=200.0)
-        dots_min, dots_max = numeric_range_input("Score Range", 0.0, 750.0, 0.0, 750.0, 5.0, prefix)
+        score_sys_filt = st.selectbox("Score Range Metric", ["Dots", "Wilks", "GLPoints"], key=f"{prefix}_score_sys_filt")
+        score_min, score_max = numeric_range_input("Score Range", 0.0, 1500.0, 0.0, 1500.0, 5.0, prefix)
     with c2:
         long_min, long_max = numeric_range_input("Experience (Years)", 0.0, 40.0, 0.0, 40.0, 0.5, prefix)
         meet_min, meet_max = numeric_range_input("Meet# Range", 1, 500, 1, 500, 1, prefix)
@@ -607,12 +614,14 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
         st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Weight classes Preset</span>", unsafe_allow_html=True)
         wc_preset = st.radio("Preset", ["Custom", "All Men", "All Women"], key=f"{prefix}_wc_preset", horizontal=True, label_visibility="collapsed")
         
-        if wc_preset == "All Men":
-            default_wc = ['52', '53', '56', '59', '60', '63', '66', '67.5', '69', '74', '75', '76', '82.5', '83', '90', '93', '100', '105', '110', '115', '120', '120+', '125', '140', '140+']
-        elif wc_preset == "All Women":
-            default_wc = ['43', '44', '47', '48', '52', '53', '56', '57', '60', '63', '67.5', '69', '75', '76', '82.5', '83', '84', '84+', '90', '90+']
-        else:
-            default_wc = []
+        if wc_preset == "All Men" or sex == "M":
+            wco = [w for w in wco if w in ['52', '53', '56', '59', '60', '63', '66', '67.5', '69', '74', '75', '76', '82.5', '83', '90', '93', '100', '105', '110', '115', '120', '120+', '125', '140', '140+']]
+        elif wc_preset == "All Women" or sex == "F":
+            wco = [w for w in wco if w in ['43', '44', '47', '48', '52', '53', '56', '57', '60', '63', '67.5', '69', '75', '76', '82.5', '83', '84', '84+', '90', '90+']]
+            
+        if wc_preset == "All Men": default_wc = wco
+        elif wc_preset == "All Women": default_wc = wco
+        else: default_wc = []
             
         valid_default_wc = [w for w in default_wc if w in wco]
         weight_classes_sel = st.multiselect(f"Weight classes", options=wco, default=valid_default_wc, key=f"{prefix}_wc")
@@ -632,7 +641,7 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
     return dict(
         group_name=group_name, events=events_sel, sex=sex, date_preset=date_preset, start_date=start_date, end_date=end_date, 
         a_min=a_min, a_max=a_max, w_min=w_min, w_max=w_max, 
-        dots_min=dots_min, dots_max=dots_max, long_min=long_min, long_max=long_max, meet_min=meet_min, meet_max=meet_max,
+        score_sys_filt=score_sys_filt, score_min=score_min, score_max=score_max, long_min=long_min, long_max=long_max, meet_min=meet_min, meet_max=meet_max,
         tot_min=tot_min, tot_max=tot_max, sq_min=sq_min, sq_max=sq_max, bn_min=bn_min, bn_max=bn_max, dl_min=dl_min, dl_max=dl_max,
         weight_classes=weight_classes_sel, tested=tested, equip=equip, 
         parent_feds=parent_feds_sel, feds=feds_sel, continents=continents_sel, countries=countries_sel,
@@ -647,8 +656,8 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
         st.write(f"**Target Metric for standards**: {target_metric}")
         
         valid_df = df_src[df_src[target_metric] > 0].copy()
-        valid_df['WeightClass'] = pd.to_numeric(valid_df['WeightClass'], errors='coerce')
-        valid_df = valid_df.dropna(subset=['WeightClass'])
+        valid_df['WeightClass'] = valid_df['WeightClass'].astype(str).str.strip()
+        valid_df = valid_df[valid_df['WeightClass'].isin(load_weight_class_options())]
         
         if valid_df.empty:
             st.warning("No data available for strength standards with current filters.")
@@ -693,6 +702,16 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
         results = []
         quantiles = [0.1667, 0.3333, 0.5000, 0.6667, 0.8333]
         
+        all_q_vals = valid_df[target_metric].quantile(quantiles)
+        if len(all_q_vals) == 5:
+            base_dict = {"Weight Class": "All"}
+            if divide_by_age: base_dict["Age Group"] = "All"
+            base_dict.update({
+                "Beginner": all_q_vals.iloc[0] * mult, "Novice": all_q_vals.iloc[1] * mult,
+                "Intermediate": all_q_vals.iloc[2] * mult, "Advanced": all_q_vals.iloc[3] * mult, "Elite": all_q_vals.iloc[4] * mult,
+            })
+            results.append(base_dict)
+        
         if divide_by_age:
             def get_age_group(age):
                 if pd.isna(age) or age == 0: return "Unknown"
@@ -723,7 +742,7 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
             res_df = pd.DataFrame(results)
             age_order = {"Subjunior": 1, "Junior": 2, "Open": 3, "Masters": 4, "Unknown": 5}
             res_df["age_sort"] = res_df["Age Group"].map(age_order)
-            res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "").apply(sort_weight_class)
+            res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "").apply(lambda x: -1 if x == "All" else sort_weight_class(x))
             res_df = res_df.sort_values(by=["wc_sort", "age_sort"]).drop(columns=["age_sort", "wc_sort"])
         else:
             grouped = valid_df.groupby('WeightClass')
@@ -744,7 +763,7 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
                 st.warning("Not enough data to generate strength standards for this group.")
                 return
             res_df = pd.DataFrame(results)
-            res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "").apply(sort_weight_class)
+            res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "").apply(lambda x: -1 if x == "All" else sort_weight_class(x))
             res_df = res_df.sort_values(by="wc_sort").drop(columns=["wc_sort"])
 
         for c in ["Beginner", "Novice", "Intermediate", "Advanced", "Elite"]: res_df[c] = res_df[c].round(1)
@@ -767,7 +786,7 @@ def render_competition_section(df_src, cfg):
     with comp_tabs[0]:
         st.write("Compare categories or athletes based on performance.")
         
-        valid_wcs = sorted(df_src['WeightClass'].dropna().astype(str).unique(), key=sort_weight_class)
+        valid_wcs = sorted([w for w in df_src['WeightClass'].dropna().astype(str).unique() if w in load_weight_class_options()], key=sort_weight_class)
         sel_comp_wcs = st.multiselect("Select Weight Classes for Chart", valid_wcs, default=valid_wcs, key=f"{cfg['group_name']}_comp_wc")
         comp_metric = st.selectbox("Select Metric", ["Total", "Dots", "Wilks", "GL Points"], key=f"{cfg['group_name']}_comp_metric")
         
@@ -788,37 +807,34 @@ def render_competition_section(df_src, cfg):
         place_n = 1
         if agg_type == "Placement (Top N)":
             place_n = st.selectbox("Select Placement", [1, 2, 3, 4, 5, 6, 7, 8], key=f"{cfg['group_name']}_place_n")
-        
-        diff_df = df_src.dropna(subset=['WeightClass', diff_metric]).copy()
+    diff_df = df_src.dropna(subset=['WeightClass', diff_metric]).copy()
         diff_df['WeightClass'] = diff_df['WeightClass'].astype(str)
+        diff_df = diff_df[diff_df['WeightClass'].isin(load_weight_class_options())]
         
         if agg_type in ["Average", "Median", "Placement (Top N)"]:
-            if agg_type == "Average":
-                agg_diff = diff_df.groupby('WeightClass')[diff_metric].mean().reset_index()
-                y_col = diff_metric
-            elif agg_type == "Median":
-                agg_diff = diff_df.groupby('WeightClass')[diff_metric].median().reset_index()
-                y_col = diff_metric
+            group_cols = ['WeightClass', 'Sex'] if 'Sex' in diff_df.columns else ['WeightClass']
+            if agg_type == "Average": agg_diff = diff_df.groupby(group_cols)[diff_metric].mean().reset_index()
+            elif agg_type == "Median": agg_diff = diff_df.groupby(group_cols)[diff_metric].median().reset_index()
             else:
                 def get_nth(series, n):
                     sorted_vals = series.nlargest(n)
                     return sorted_vals.min() if len(sorted_vals) >= n else np.nan
-                agg_diff = diff_df.groupby('WeightClass')[diff_metric].apply(lambda x: get_nth(x, place_n)).reset_index()
-                y_col = diff_metric
+                agg_diff = diff_df.groupby(group_cols)[diff_metric].apply(lambda x: get_nth(x, place_n)).reset_index()
 
             agg_diff['SortKey'] = agg_diff['WeightClass'].apply(sort_weight_class)
             agg_diff = agg_diff.sort_values('SortKey').drop(columns=['SortKey'])
             
-            fig_diff = px.line(
-                agg_diff, x="WeightClass", y=y_col,
-                markers=True, title=f"Difficulty Level per Category - {agg_type} ({diff_metric})"
+            color_col = 'Sex' if 'Sex' in agg_diff.columns else None
+            fig_diff = px.bar(
+                agg_diff, x="WeightClass", y=diff_metric, color=color_col, barmode="group",
+                title=f"Difficulty Level per Category - {agg_type} ({diff_metric})"
             )
         else:
             diff_df['SortKey'] = diff_df['WeightClass'].apply(sort_weight_class)
             diff_df = diff_df.sort_values('SortKey')
+            color_col = 'Sex' if 'Sex' in diff_df.columns else 'WeightClass'
             fig_diff = px.scatter(
-                diff_df, x="WeightClass", y=diff_metric, color="WeightClass",
-                hover_data=["Name", "Place", "Total"],
+                diff_df, x="WeightClass", y=diff_metric, color=color_col, hover_data=["Name", "Place", "Total"],
                 title=f"Difficulty Level per Category - All Points ({diff_metric})"
             )
             
@@ -841,8 +857,15 @@ def render_competition_section(df_src, cfg):
         group_by_age = st.checkbox("Group by Age Category", key=f"{cfg['group_name']}_t_group_age")
         
         display_t_df = t_df.copy()
+        if "Date" in display_t_df.columns: display_t_df["Date"] = pd.to_datetime(display_t_df["Date"], errors='coerce').dt.strftime("%Y-%m-%d")
         for c in ["Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"]:
-            if c in display_t_df.columns: display_t_df[c] = display_t_df[c].apply(format_attempt)
+            if c in display_t_df.columns: 
+                display_t_df[c] = pd.to_numeric(display_t_df[c], errors='coerce') * mult
+                display_t_df[c] = display_t_df[c].apply(format_attempt)
+                if use_lbs:
+                    new_c = c.replace("Kg", "Lbs")
+                    display_t_df.rename(columns={c: new_c}, inplace=True)
+                    sel_cols = [new_c if x==c else x for x in sel_cols]
         for c in ["Total", "Bodyweight"]:
             if c in display_t_df.columns: display_t_df[c] = (display_t_df[c] * mult).round(1)
         for c in ["Dots", "Wilks", "GL Points"]:
@@ -1021,17 +1044,17 @@ elif analysis_mode == "Result vs group":
     with col_sq: 
         c1, c2 = st.columns(2)
         u_sq_w = c1.number_input(f"Squat ({unit})", value=0.0, step=5.0)
-        u_sq_r = c2.number_input("Reps SQ", value=1, min_value=1)
+        u_sq_r = c2.number_input("Squat Reps ", value=1, min_value=1)
         if u_sq_r > 1: st.caption(f"Est 1RM: {calc_1rm(u_sq_w, u_sq_r):.1f} {unit}")
     with col_bn: 
         c1, c2 = st.columns(2)
         u_bn_w = c1.number_input(f"Bench ({unit})", value=0.0, step=2.5)
-        u_bn_r = c2.number_input("Reps BN", value=1, min_value=1)
+        u_bn_r = c2.number_input("Bench Reps ", value=1, min_value=1)
         if u_bn_r > 1: st.caption(f"Est 1RM: {calc_1rm(u_bn_w, u_bn_r):.1f} {unit}")
     with col_dl: 
         c1, c2 = st.columns(2)
         u_dl_w = c1.number_input(f"Deadlift ({unit})", value=0.0, step=5.0)
-        u_dl_r = c2.number_input("Reps DL", value=1, min_value=1)
+        u_dl_r = c2.number_input("Deadlift Reps ", value=1, min_value=1)
         if u_dl_r > 1: st.caption(f"Est 1RM: {calc_1rm(u_dl_w, u_dl_r):.1f} {unit}")
         
     u_squat = calc_1rm(u_sq_w, u_sq_r)
@@ -1437,15 +1460,17 @@ elif analysis_mode == "Athlete vs athlete":
         selected_stats = st.multiselect("Display metrics:", [s[1] for s in stats], default=[s[1] for s in stats])
         stats = [s for s in stats if s[1] in selected_stats]
         
+        stat_data = []
         for label, col, multiplier, *agg in stats:
             agg_func = agg[0] if agg else "max"
             val_a = get_stat(df_a, col, agg_func) * multiplier
             val_b = get_stat(df_b, col, agg_func) * multiplier
             
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f"**{val_a:.1f}**" if pd.notna(val_a) else "N/A")
-            c2.markdown(f"*{label}*")
-            c3.markdown(f"**{val_b:.1f}**" if pd.notna(val_b) else "N/A")
+            val_a_disp = f"{val_a:.1f}" if pd.notna(val_a) else "N/A"
+            val_b_disp = f"{val_b:.1f}" if pd.notna(val_b) else "N/A"
+            stat_data.append({name_a: val_a_disp, "Metric": label, name_b: val_b_disp})
+            
+        st.dataframe(pd.DataFrame(stat_data).set_index("Metric"), use_container_width=True)
 
         st.markdown("---")
         st.subheader("Common Meets (Cross-Year Comparison)", anchor=False)
@@ -1456,16 +1481,17 @@ elif analysis_mode == "Athlete vs athlete":
         common = pd.merge(df_a_dedup, df_b_dedup, on="NormMeet", suffixes=(f'_{name_a}', f'_{name_b}'))
         
         if not common.empty:
-            common_display = common[["NormMeet", "Date_" + name_a, "Date_" + name_b, "Event_" + name_a, "Event_" + name_b, "Place_" + name_a, "Place_" + name_b, "Total_" + name_a, "Total_" + name_b, "Dots_" + name_a, "Dots_" + name_b]].copy()
-            common_display.rename(columns={
-                f"Date_{name_a}": f"Date ({name_a})", f"Date_{name_b}": f"Date ({name_b})",
-                f"Event_{name_a}": f"Event ({name_a})", f"Event_{name_b}": f"Event ({name_b})",
-                f"Place_{name_a}": f"Place ({name_a})", f"Place_{name_b}": f"Place ({name_b})",
-                f"Total_{name_a}": f"Total ({name_a})", f"Total_{name_b}": f"Total ({name_b})",
-                f"Dots_{name_a}": f"Dots ({name_a})", f"Dots_{name_b}": f"Dots ({name_b})",
-            }, inplace=True)
-            for col in [f"Total ({name_a})", f"Total ({name_b})"]: common_display[col] = (common_display[col] * mult).round(1)
-            render_dataframe(common_display, key_prefix="ath_vs_common")
+            common_display = common.copy()
+            for c in common_display.columns:
+                if c.endswith(f"_{name_a}"): common_display.rename(columns={c: c.replace(f"_{name_a}", f" ({name_a})")}, inplace=True)
+                elif c.endswith(f"_{name_b}"): common_display.rename(columns={c: c.replace(f"_{name_b}", f" ({name_b})")}, inplace=True)
+            for col in [f"Total ({name_a})", f"Total ({name_b})"]: 
+                if col in common_display.columns: common_display[col] = (common_display[col] * mult).round(1)
+            
+            avail_common_cols = common_display.columns.tolist()
+            default_common = ["NormMeet", f"Date ({name_a})", f"Date ({name_b})", f"Total ({name_a})", f"Total ({name_b})", f"Dots ({name_a})", f"Dots ({name_b})"]
+            sel_common_cols = st.multiselect("Select columns:", avail_common_cols, default=[c for c in default_common if c in avail_common_cols])
+            render_dataframe(common_display[sel_common_cols], key_prefix="ath_vs_common")
         else:
             st.info("These athletes have no matching competition names (under selected constraints).")
 
@@ -1530,51 +1556,95 @@ elif analysis_mode == "Competition Analysis" and st.session_state.get("df_comp")
 elif analysis_mode == "Calculators":
     st.header("Formulas Point Calculator", anchor=False)
     
-    cc1, cc2, cc3 = st.columns(3)
-    with cc1:
-        calc_sex = st.selectbox("Biological Sex", ["M", "F"])
-        calc_bw = st.number_input(f"Bodyweight ({unit})", min_value=1.0, value=80.0, step=0.5)
-    with cc2:
-        c2a, c2b = st.columns(2)
-        calc_sq_w = c2a.number_input(f"Squat ({unit})", min_value=0.0, value=150.0, step=2.5)
-        calc_sq_r = c2b.number_input("SQ Reps", value=1, min_value=1)
-        if calc_sq_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_sq_w, calc_sq_r):.1f} {unit}")
-        
-        c3a, c3b = st.columns(2)
-        calc_bn_w = c3a.number_input(f"Bench ({unit})", min_value=0.0, value=100.0, step=2.5)
-        calc_bn_r = c3b.number_input("BN Reps", value=1, min_value=1)
-        if calc_bn_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_bn_w, calc_bn_r):.1f} {unit}")
-        
-        c4a, c4b = st.columns(2)
-        calc_dl_w = c4a.number_input(f"Deadlift ({unit})", min_value=0.0, value=200.0, step=2.5)
-        calc_dl_r = c4b.number_input("DL Reps", value=1, min_value=1)
-        if calc_dl_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_dl_w, calc_dl_r):.1f} {unit}")
-        
-    calc_sq_1rm = calc_1rm(calc_sq_w, calc_sq_r)
-    calc_bn_1rm = calc_1rm(calc_bn_w, calc_bn_r)
-    calc_dl_1rm = calc_1rm(calc_dl_w, calc_dl_r)
-    calc_total = calc_sq_1rm + calc_bn_1rm + calc_dl_1rm
+    calc_mode = st.radio("Mode", ["Calculate Points", "Reverse Calculator (Target Points to Lifts)"], horizontal=True)
     
-    # Conversion to KG for scoring systems
-    calc_bw_kg = calc_bw / 2.20462 if use_lbs else calc_bw
-    calc_tot_kg = calc_total / 2.20462 if use_lbs else calc_total
-    
-    # DOTS
-    dots_score = calc_tot_kg * (500.0 / (-0.000001093 * (calc_bw_kg ** 4) + 0.0007391293 * (calc_bw_kg ** 3) -0.1918759221 * (calc_bw_kg ** 2) + 24.0900756 * calc_bw_kg - 307.75076)) if calc_sex=="M" else calc_tot_kg * (500.0 / (-0.000010706 * (calc_bw_kg ** 4) + 0.005158568 * (calc_bw_kg ** 3) -0.92501065 * (calc_bw_kg ** 2) + 75.323049 * calc_bw_kg - 516.39869))
-    
-    # Wilks
-    if calc_sex == "M":
-        denom = -216.0475144 + 16.2606339*calc_bw_kg -0.002388645*(calc_bw_kg**2) -0.00113732*(calc_bw_kg**3) + 7.01863E-06*(calc_bw_kg**4) -1.291E-08*(calc_bw_kg**5)
+    if calc_mode == "Calculate Points":
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            calc_sex = st.selectbox("Biological Sex", ["M", "F"])
+            calc_bw = st.number_input(f"Bodyweight ({unit})", min_value=1.0, value=80.0, step=0.5)
+        with cc2:
+            c2a, c2b = st.columns(2)
+            calc_sq_w = c2a.number_input(f"Squat ({unit})", min_value=0.0, value=150.0, step=2.5)
+            calc_sq_r = c2b.number_input("Squat Reps", value=1, min_value=1)
+            if calc_sq_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_sq_w, calc_sq_r):.1f} {unit}")
+            
+            c3a, c3b = st.columns(2)
+            calc_bn_w = c3a.number_input(f"Bench ({unit})", min_value=0.0, value=100.0, step=2.5)
+            calc_bn_r = c3b.number_input("Bench Reps", value=1, min_value=1)
+            if calc_bn_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_bn_w, calc_bn_r):.1f} {unit}")
+            
+            c4a, c4b = st.columns(2)
+            calc_dl_w = c4a.number_input(f"Deadlift ({unit})", min_value=0.0, value=200.0, step=2.5)
+            calc_dl_r = c4b.number_input("Deadlift Reps", value=1, min_value=1)
+            if calc_dl_r > 1: st.caption(f"Est 1RM: {calc_1rm(calc_dl_w, calc_dl_r):.1f} {unit}")
+            
+        calc_sq_1rm = calc_1rm(calc_sq_w, calc_sq_r)
+        calc_bn_1rm = calc_1rm(calc_bn_w, calc_bn_r)
+        calc_dl_1rm = calc_1rm(calc_dl_w, calc_dl_r)
+        calc_total = calc_sq_1rm + calc_bn_1rm + calc_dl_1rm
+        
+        calc_bw_kg = calc_bw / 2.20462 if use_lbs else calc_bw
+        calc_tot_kg = calc_total / 2.20462 if use_lbs else calc_total
+        
+        dots_score = calc_tot_kg * (500.0 / (-0.000001093 * (calc_bw_kg ** 4) + 0.0007391293 * (calc_bw_kg ** 3) -0.1918759221 * (calc_bw_kg ** 2) + 24.0900756 * calc_bw_kg - 307.75076)) if calc_sex=="M" else calc_tot_kg * (500.0 / (-0.000010706 * (calc_bw_kg ** 4) + 0.005158568 * (calc_bw_kg ** 3) -0.92501065 * (calc_bw_kg ** 2) + 75.323049 * calc_bw_kg - 516.39869))
+        
+        if calc_sex == "M":
+            denom = -216.0475144 + 16.2606339*calc_bw_kg -0.002388645*(calc_bw_kg**2) -0.00113732*(calc_bw_kg**3) + 7.01863E-06*(calc_bw_kg**4) -1.291E-08*(calc_bw_kg**5)
+        else:
+            denom = 594.3174777 -27.23842536*calc_bw_kg + 0.821122268*(calc_bw_kg**2) -0.009307339*(calc_bw_kg**3) + 4.73158E-05*(calc_bw_kg**4) -9.054E-08*(calc_bw_kg**5)
+        wilks_score = calc_tot_kg * (500.0 / denom) if denom != 0 else 0
+        
+        gl_denom = (1199.72839 - 925.40462 * np.exp(-0.00510531 * calc_bw_kg)) if calc_sex=="M" else (610.79046 - 451.04414 * np.exp(-0.00735665 * calc_bw_kg))
+        gl_score = calc_tot_kg * (100.0 / gl_denom) if gl_denom != 0 else 0
+        
+        st.markdown("---")
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric(f"Total ({unit})", f"{calc_total:.1f}")
+        sc2.metric("DOTS", f"{dots_score:.2f}")
+        sc3.metric("Wilks", f"{wilks_score:.2f}")
+        sc4.metric("GL Points", f"{gl_score:.2f}")
+        
     else:
-        denom = 594.3174777 -27.23842536*calc_bw_kg + 0.821122268*(calc_bw_kg**2) -0.009307339*(calc_bw_kg**3) + 4.73158E-05*(calc_bw_kg**4) -9.054E-08*(calc_bw_kg**5)
-    wilks_score = calc_tot_kg * (500.0 / denom) if denom != 0 else 0
-    
-    # GL Points
-    denom_gl = (1199.72839 - 925.40462 * np.exp(-0.00510531 * calc_bw_kg)) if calc_sex=="M" else (610.79046 - 451.04414 * np.exp(-0.00735665 * calc_bw_kg))
-    gl_score = calc_tot_kg * (100.0 / denom_gl) if denom_gl != 0 else 0
-    
-    with cc3:
-        st.metric("Total", f"{calc_total:.1f} {unit}")
-        st.metric("DOTS", f"{dots_score:.2f}")
-        st.metric("Wilks", f"{wilks_score:.2f}")
-        st.metric("GL Points", f"{gl_score:.2f}")
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            calc_sex = st.selectbox("Biological Sex", ["M", "F"], key="rev_sex")
+            calc_bw = st.number_input(f"Bodyweight ({unit})", min_value=1.0, value=80.0, step=0.5, key="rev_bw")
+        with cc2:
+            target_sys = st.selectbox("Target Metric", ["GL Points", "Dots", "Wilks", "Total"], key="rev_sys")
+            target_score = st.number_input("Target Score", min_value=0.0, value=400.0, step=5.0)
+        with cc3:
+            lift_event = st.selectbox("Lift Event (Distribute Total)", ["SBD", "S", "B", "D", "SB", "BD", "SD"], key="rev_event")
+            
+        st.markdown("**Lift Proportions (%)**")
+        p_c1, p_c2, p_c3 = st.columns(3)
+        with p_c1: prop_sq = st.number_input("Squat %", value=35.0 if "S" in lift_event else 0.0, disabled="S" not in lift_event)
+        with p_c2: prop_bn = st.number_input("Bench %", value=25.0 if "B" in lift_event else 0.0, disabled="B" not in lift_event)
+        with p_c3: prop_dl = st.number_input("Deadlift %", value=40.0 if "D" in lift_event else 0.0, disabled="D" not in lift_event)
+        
+        tot_prop = prop_sq + prop_bn + prop_dl
+        if tot_prop == 0:
+            st.warning("Proportions must sum to > 0")
+        else:
+            calc_bw_kg = calc_bw / 2.20462 if use_lbs else calc_bw
+            
+            if target_sys == "Total":
+                req_total_kg = target_score / 2.20462 if use_lbs else target_score
+            else:
+                if target_sys == "Dots":
+                    coeff = (500.0 / (-0.000001093 * (calc_bw_kg ** 4) + 0.0007391293 * (calc_bw_kg ** 3) -0.1918759221 * (calc_bw_kg ** 2) + 24.0900756 * calc_bw_kg - 307.75076)) if calc_sex=="M" else (500.0 / (-0.000010706 * (calc_bw_kg ** 4) + 0.005158568 * (calc_bw_kg ** 3) -0.92501065 * (calc_bw_kg ** 2) + 75.323049 * calc_bw_kg - 516.39869))
+                elif target_sys == "Wilks":
+                    denom = -216.0475144 + 16.2606339*calc_bw_kg -0.002388645*(calc_bw_kg**2) -0.00113732*(calc_bw_kg**3) + 7.01863E-06*(calc_bw_kg**4) -1.291E-08*(calc_bw_kg**5) if calc_sex == "M" else 594.3174777 -27.23842536*calc_bw_kg + 0.821122268*(calc_bw_kg**2) -0.009307339*(calc_bw_kg**3) + 4.73158E-05*(calc_bw_kg**4) -9.054E-08*(calc_bw_kg**5)
+                    coeff = 500.0 / denom if denom != 0 else 1
+                elif target_sys == "GL Points":
+                    denom = (1199.72839 - 925.40462 * np.exp(-0.00510531 * calc_bw_kg)) if calc_sex=="M" else (610.79046 - 451.04414 * np.exp(-0.00735665 * calc_bw_kg))
+                    coeff = 100.0 / denom if denom != 0 else 1
+                req_total_kg = target_score / coeff if coeff != 0 else 0
+                
+            req_total_disp = req_total_kg * (2.20462 if use_lbs else 1.0)
+            
+            st.success(f"**Required Total for {target_score} {target_sys}:** {req_total_disp:.1f} {unit}")
+            rc1, rc2, rc3 = st.columns(3)
+            if "S" in lift_event: rc1.metric("Required Squat", f"{(req_total_disp * prop_sq / tot_prop):.1f} {unit}")
+            if "B" in lift_event: rc2.metric("Required Bench", f"{(req_total_disp * prop_bn / tot_prop):.1f} {unit}")
+            if "D" in lift_event: rc3.metric("Required Deadlift", f"{(req_total_disp * prop_dl / tot_prop):.1f} {unit}")
