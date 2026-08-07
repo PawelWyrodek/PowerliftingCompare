@@ -539,7 +539,7 @@ use_lbs = st.sidebar.toggle("Pounds (lbs)", value=False)
 unit = "lbs" if use_lbs else "kg"
 mult = 2.20462262 if use_lbs else 1.0
 
-MODES = ["Result vs group", "Athlete vs group", "Group", "Group vs group", "Athlete", "Athlete vs athlete", "Competition Analysis", "Calculators"]
+MODES = ["Result vs group", "Athlete vs group", "Group", "Group vs group", "Athlete", "Athlete vs athlete", "Competition", "Calculators"]
 
 def change_mode():
     st.session_state.active_mode = st.session_state._mode_radio
@@ -1110,8 +1110,8 @@ elif analysis_mode == "Athlete vs athlete":
         st.session_state.submit_clicked = True
         st.session_state.vs_event_opt = vs_event_opt
 
-elif analysis_mode == "Competition Analysis":
-    st.markdown("## Competition Analysis")
+elif analysis_mode == "Competition":
+    st.markdown("## Competition")
     comp_search = st.text_input("Search Competition Name (Type at least 3 characters):", key="comp_search_val")
     
     if comp_search and len(comp_search) >= 3:
@@ -1177,7 +1177,7 @@ if st.session_state.submit_clicked:
             with st.spinner("Fetching Athlete B..."): 
                 st.session_state.ath_df_b = fetch_athlete_data(b_name)
             
-    elif analysis_mode == "Competition Analysis":
+    elif analysis_mode == "Competition":
         sel_comp = st.session_state.get("sel_comp")
         sel_year = st.session_state.get("sel_comp_year")
         if sel_comp:
@@ -1215,7 +1215,7 @@ elif analysis_mode == "Athlete vs group" and not st.session_state.df_a.empty and
 elif analysis_mode == "Group vs group" and not st.session_state.df_a.empty and not st.session_state.df_b.empty: show_analysis = True
 elif analysis_mode == "Athlete" and not st.session_state.ath_df.empty: show_analysis = True
 elif analysis_mode == "Athlete vs athlete" and not st.session_state.ath_df_a.empty and not st.session_state.ath_df_b.empty: show_analysis = True
-elif analysis_mode == "Competition Analysis" and st.session_state.get("df_comp") is not None and not st.session_state.df_comp.empty: show_analysis = True
+elif analysis_mode == "Competition" and st.session_state.get("df_comp") is not None and not st.session_state.df_comp.empty: show_analysis = True
 
 if analysis_mode != "Calculators" and show_analysis:
     st.header("Analysis", anchor=False)
@@ -1514,9 +1514,9 @@ elif analysis_mode == "Athlete vs athlete":
             fig_vs.update_traces(mode='lines+markers')
             st.plotly_chart(fig_vs, use_container_width=True)
             
-elif analysis_mode == "Competition Analysis" and st.session_state.get("df_comp") is not None and not st.session_state.get("df_comp", pd.DataFrame()).empty:
+elif analysis_mode == "Competition" and st.session_state.get("df_comp") is not None and not st.session_state.get("df_comp", pd.DataFrame()).empty:
     df_comp = st.session_state.df_comp
-    st.subheader(f"Competition Analysis: {st.session_state.comp_name}", anchor=False)
+    st.subheader(f"Competition: {st.session_state.comp_name}", anchor=False)
 
     st.markdown("### Filters")
     col_f1, col_f2, col_f3 = st.columns(3)
