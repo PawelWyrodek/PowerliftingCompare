@@ -545,6 +545,17 @@ def change_mode():
     st.session_state.active_mode = st.session_state._mode_radio
     st.query_params["mode"] = st.session_state._mode_radio
     st.session_state.submit_clicked = False
+MODES = ["Result vs group", "Athlete vs group", "Group", "Group vs group", "Athlete", "Athlete vs athlete", "Competition", "Calculators"]
+
+def change_mode():
+    st.session_state.active_mode = st.session_state._mode_radio
+    st.query_params["mode"] = st.session_state._mode_radio
+    st.session_state.submit_clicked = False
+
+# --- ADD THIS VALIDATION CHECK ---
+if st.session_state.active_mode not in MODES:
+    st.session_state.active_mode = "Result vs group" # Fallback to default
+# ---------------------------------
 
 analysis_mode = st.sidebar.radio("Select Analysis Mode", MODES, index=MODES.index(st.session_state.active_mode), key="_mode_radio", on_change=change_mode)
 
