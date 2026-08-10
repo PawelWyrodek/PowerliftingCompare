@@ -708,10 +708,16 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
                 st.warning("Not enough weight classes in filtered data to interpolate.")
                 return
 
-            wcs = agg_df.index.values
+            # Convert weight class strings to sorted numeric floats for np.interp
+            numeric_wcs = np.array([sort_weight_class(wc) for wc in agg_df.index], dtype=float)
+            sort_idx = np.argsort(numeric_wcs)
+            
+            wcs = numeric_wcs[sort_idx]
+            
             interp_vals = []
             for col in agg_df.columns:
-                interp_vals.append(np.interp(exact_bw_kg, wcs, agg_df[col].values))
+                fp = np.asarray(agg_df[col].values, dtype=float)[sort_idx]
+                interp_vals.append(np.interp(exact_bw_kg, wcs, fp))
             
             exact_df = pd.DataFrame([interp_vals], columns=["Beginner", "Novice", "Intermediate", "Advanced", "Elite"], index=[f"{exact_bw} {unit}"])
             exact_df = exact_df.round(1)
