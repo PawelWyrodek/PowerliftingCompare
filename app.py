@@ -285,8 +285,14 @@ def build_query(cfg):
         base_where += f" AND p.Equipment IN ({placeholders})"
         params += cfg["equip"]
 
+    actual_a_min, actual_a_max = cfg["a_min"], cfg["a_max"]
+    if cfg.get("age_cat") == "Subjunior (<=18)": actual_a_min, actual_a_max = 1, 18
+    elif cfg.get("age_cat") == "Junior (19-23)": actual_a_min, actual_a_max = 19, 23
+    elif cfg.get("age_cat") == "Open (24-39)": actual_a_min, actual_a_max = 24, 39
+    elif cfg.get("age_cat") == "Masters (40+)": actual_a_min, actual_a_max = 40, 99
+    
     base_where += " AND p.Age BETWEEN ? AND ?"
-    params += [cfg["a_min"], cfg["a_max"]]
+    params += [actual_a_min, actual_a_max]
     base_where += " AND p.BodyweightKg BETWEEN ? AND ?"
     params += [cfg["w_min"], cfg["w_max"]]
 
@@ -606,7 +612,8 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
     st.caption("Note: To effectively restrict bodyweight independently of weight categories, please adjust the Bodyweight slider below.")
     c1, c2, c3 = st.columns(3)
     with c1:
-        a_min, a_max = numeric_range_input("Age Range", 1, 99, 18, 40, 1, prefix)
+        age_cat = st.selectbox("Age Category Preset", ["Any", "Subjunior (<=18)", "Junior (19-23)", "Open (24-39)", "Masters (40+)"], key=f"{prefix}_age_cat")
+        a_min, a_max = numeric_range_input("Age Range", 1, 99, 13, 80, 1, prefix)
         w_min, w_max = numeric_range_input("Bodyweight Range", 0.0, 500.0, 0.0, 500.0, 0.5, prefix, slider_max=200.0)
         score_sys_filt = st.selectbox("Score Range Metric", ["Dots", "Wilks", "GLPoints"], key=f"{prefix}_score_sys_filt")
         score_min, score_max = numeric_range_input("Score Range", 0.0, 1500.0, 0.0, 1500.0, 5.0, prefix)
@@ -656,12 +663,13 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
 
     return dict(
         group_name=group_name, events=events_sel, sex=sex, date_preset=date_preset, start_date=start_date, end_date=end_date, 
-        a_min=a_min, a_max=a_max, w_min=w_min, w_max=w_max, 
+        age_cat=age_cat, a_min=a_min, a_max=a_max, w_min=w_min, w_max=w_max, 
         score_sys_filt=score_sys_filt, score_min=score_min, score_max=score_max, long_min=long_min, long_max=long_max, meet_min=meet_min, meet_max=meet_max,
         tot_min=tot_min, tot_max=tot_max, sq_min=sq_min, sq_max=sq_max, bn_min=bn_min, bn_max=bn_max, dl_min=dl_min, dl_max=dl_max,
         weight_classes=weight_classes_sel, tested=tested, equip=equip, 
         parent_feds=parent_feds_sel, feds=feds_sel, continents=continents_sel, countries=countries_sel,
         metric=metric_label, top_n=top_n_val
+        
     )
 
 def format_wc(val, u):
@@ -906,7 +914,7 @@ def render_competition_section(df_src, cfg):
             display_cols = [c for c in sel_cols if c in display_t_df.columns]
             render_dataframe(display_t_df[display_cols], key_prefix=f"{cfg['group_name']}_t")
 
-def render_group_tab(df_src, cfg, exact_bw_target=None):
+def render_group_tab(df_src, cfg, exact_bw_target=None, user_data=None):
     if df_src is None or df_src.empty:
         st.warning(f"No data found for {cfg['group_name']}.")
         return
@@ -957,6 +965,10 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
         if not dist_df.empty:
             d_mult = mult if dist_met not in ["Dots", "Wilks", "GL Points", "Age", "Experience"] else 1.0
             fig_dist = px.histogram(dist_df, x=dist_df[dist_met]*d_mult, nbins=40, marginal="box", color_discrete_sequence=["#1565C0"])
+            if user_data and dist_met in user_data and pd.notna(user_data[dist_met]):
+                u_val = user_data[dist_met]
+                if dist_met not in ["Dots", "Wilks", "GL Points", "Age", "Experience"]: u_val *= mult
+                fig_dist.add_vline(x=u_val, line_width=4, line_dash="dash", line_color="red", annotation_text=f"  {user_data.get('Name', 'Target')}", annotation_position="top right")
             
     st.plotly_chart(fig_dist, use_container_width=True)
 
@@ -985,7 +997,14 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
         fig_custom = px.scatter(
             df_plot, x=x_ax, y=y_ax, color=c_ax if c_ax != "None" else None, 
             hover_data=["Name", "Squat", "Bench", "Deadlift", "Total", sys_col, "Bodyweight", "Date", "Event", "MeetName"], 
-            trendline=trend
+            trendline=trend)
+        if user_data and x_ax in user_data and y_ax in user_data and pd.notna(user_data[x_ax]) and pd.notna(user_data[y_ax]):
+            u_x = user_data[x_ax] if x_ax in ["Dots", "Wilks", "GL Points", "Age", "Experience", "Meet#"] else user_data[x_ax] * mult
+            u_y = user_data[y_ax] if y_ax in ["Dots", "Wilks", "GL Points", "Age", "Experience", "Meet#"] else user_data[y_ax] * mult
+            fig_custom.add_trace(go.Scatter(
+                x=[u_x], y=[u_y], mode='markers', marker=dict(color='red', size=16, symbol='star', line=dict(color='black', width=2)),
+                name=user_data.get('Name', 'Cel/PR')
+            )
         )
         st.plotly_chart(fig_custom, use_container_width=True)
 
@@ -998,10 +1017,14 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
     df_table["Experience"] = df_table["Experience"].round(1)
     df_table["Date"] = pd.to_datetime(df_table["Date"], errors='coerce').dt.strftime("%Y-%m-%d")
     
-    all_table_cols = ["Rank", "Name", "Sex", "Country", "Age", "Bodyweight", "Event", "Squat", "Bench", "Deadlift", "Total", sys_col, "Date", "MeetName", "Meet#", "Experience", "Equipment", "Tested", "Federation", "ParentFederation", "Place"]
-    default_table_cols = ["Rank", "Name", "Age", "Bodyweight", "Date", "MeetName", "Squat", "Bench", "Deadlift", "Total", sys_col, "Place"]
+    df_display = df_table.copy()
+    df_display.insert(0, "Rank", range(1, len(df_display) + 1))
+    
+    all_table_cols = list(df_display.columns)
+    default_table_cols = [c for c in ["Rank", "Name", "Age", "Bodyweight", "Date", "MeetName", "Squat", "Bench", "Deadlift", "Total", sys_col, "Place"] if c in all_table_cols]
     
     selected_leaderboard_cols = st.multiselect("Customize columns:", all_table_cols, default=default_table_cols, key=f"{cfg['group_name']}_l_cols")
+    display_cols = selected_leaderboard_cols # Nie ma już ryzyka usunięcia kolumny
     
     df_display = df_table.copy()
     df_display.insert(0, "Rank", range(1, len(df_display) + 1))
@@ -1010,7 +1033,6 @@ def render_group_tab(df_src, cfg, exact_bw_target=None):
     render_dataframe(df_display[display_cols], key_prefix=f"{cfg['group_name']}_l", set_index="Rank" if "Rank" in display_cols else None)
 
 def fetch_athlete_data(name):
-    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     conn = get_duckdb_connection()
     q = """
         SELECT p.*,
@@ -1170,6 +1192,7 @@ elif analysis_mode == "Calculators":
     st.markdown("---")
 
     # Funkcje pomocnicze do punktacji
+    # Funkcje pomocnicze do punktacji
     def calc_points(bw, tot, sex, system):
         if bw <= 0 or tot <= 0: return 0.0
         if system == "Dots":
@@ -1216,43 +1239,43 @@ elif analysis_mode == "Calculators":
             bw_rc = st.number_input("Bodyweight", min_value=30.0, max_value=300.0, value=72.0, step=0.5)
             sex_rc = st.selectbox("Sex ", ["M", "F"])
 
-        st.markdown("#### Lift Proportions")
-        st.caption("Adjust the sliders below to balance your lifts.")
-        
-        sl1, sl2 = st.columns(2)
-        with sl1:
-            sq_bn_ratio = st.slider(
-                "🔴 Squat / Bench Ratio", 
-                min_value=0.5, max_value=3.0, value=1.66, step=0.01,
-                help="E.g., 1.5 means your Squat is 50% heavier than your Bench."
-            )
-        with sl2:
-            bn_dl_ratio = st.slider(
-                "🔵 Bench / Deadlift Ratio", 
-                min_value=0.2, max_value=1.5, value=0.36, step=0.01,
-                help="E.g., 0.5 means your Bench is exactly half of your Deadlift."
-            )
+        # Odtworzona logika przeliczająca wybrane punkty na wymagany Total (req_total)
+        req_total = 0.0
+        if target_metric == "Total":
+            req_total = target_val
+        else:
+            if target_metric == "Dots":
+                if sex_rc == "M": denom = -0.000001093 * (bw_rc ** 4) + 0.0007391293 * (bw_rc ** 3) -0.1918759221 * (bw_rc ** 2) + 24.0900756 * bw_rc - 307.75076
+                else: denom = -0.000010706 * (bw_rc ** 4) + 0.005158568 * (bw_rc ** 3) -0.92501065 * (bw_rc ** 2) + 75.323049 * bw_rc - 516.39869
+                if denom != 0: req_total = target_val * denom / 500.0
+            elif target_metric == "Wilks":
+                if sex_rc == "M": denom = -216.0475144 + 16.2606339*bw_rc -0.002388645*(bw_rc**2) -0.00113732*(bw_rc**3) + 7.01863E-06*(bw_rc**4) -1.291E-08*(bw_rc**5)
+                else: denom = 594.3174777 -27.23842536*bw_rc + 0.821122268*(bw_rc**2) -0.009307339*(bw_rc**3) + 4.73158E-05*(bw_rc**4) -9.054E-08*(bw_rc**5)
+                if denom != 0: req_total = target_val * denom / 500.0
+            elif target_metric == "GL Points":
+                if sex_rc == "M": denom = 1199.72839 - 925.40462 * np.exp(-0.00510531 * bw_rc)
+                else: denom = 610.79046 - 451.04414 * np.exp(-0.00735665 * bw_rc)
+                if denom != 0: req_total = target_val * denom / 100.0
 
-        # Odwracanie punktacji na wymagany Total
-        req_total = target_val
-        if target_metric != "Total":
-            test_points = calc_points(bw_rc, 1000.0, sex_rc, target_metric) # liczymy punkty dla tony by zdobyć mnożnik
-            if test_points > 0:
-                multiplier = test_points / 1000.0
-                req_total = target_val / multiplier
-            else:
-                req_total = 0.0
+        st.markdown("#### Lift Proportions (%)")
+        st.caption("Write lift proportions as percentages of the total. They should sum to 100%.")
+        
+        c_pct1, c_pct2, c_pct3 = st.columns(3)
+        with c_pct1:
+            pct_sq = st.number_input("Squat %", min_value=1.0, max_value=100.0, value=36.0, step=1.0)
+        with c_pct2:
+            pct_bn = st.number_input("Bench %", min_value=1.0, max_value=100.0, value=24.0, step=1.0)
+        with c_pct3:
+            pct_dl = st.number_input("Deadlift %", min_value=1.0, max_value=100.0, value=40.0, step=1.0)
+            
+        total_pct = pct_sq + pct_bn + pct_dl
+        if abs(total_pct - 100.0) > 0.1:
+            st.warning(f"Your proportions sum to {total_pct}%, not 100%. Results will be scaled proportionally.")
 
         if req_total > 0:
-            # Matematyka relacji:
-            # Total = Sq + Bn + Dl
-            # Sq = Bn * sq_bn_ratio
-            # Dl = Bn / bn_dl_ratio
-            # Total = Bn * sq_bn_ratio + Bn + Bn / bn_dl_ratio
-            
-            calc_bn = req_total / (sq_bn_ratio + 1.0 + (1.0 / bn_dl_ratio))
-            calc_sq = calc_bn * sq_bn_ratio
-            calc_dl = calc_bn / bn_dl_ratio
+            calc_sq = req_total * (pct_sq / total_pct)
+            calc_bn = req_total * (pct_bn / total_pct)
+            calc_dl = req_total * (pct_dl / total_pct)
 
             st.success(f"Required Total: **{req_total:.1f}**")
             rc1, rc2, rc3 = st.columns(3)
@@ -1386,7 +1409,9 @@ if analysis_mode in ["Group", "Result vs group"] and not st.session_state.df_a.e
             st.caption(f"**Your Proportions in Total:** Squat {u_sq_prop:.1f}% | Bench {u_bp_prop:.1f}% | Deadlift {u_dl_prop:.1f}%")
             
         st.markdown("---")
-        if not df_a.empty: render_group_tab(df_a, cfg_a_mem, exact_bw_target=u_bw)
+        u_score_val = u_score if 'u_score' in locals() else 0.0
+        user_data = {"Name": "Twój Cel", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
+        if not df_a.empty: render_group_tab(df_a, cfg_a_mem, exact_bw_target=u_bw, user_data=user_data)
         
     elif analysis_mode == "Group":
         if not df_a.empty: render_group_tab(df_a, cfg_a_mem)
@@ -1418,7 +1443,9 @@ elif analysis_mode == "Athlete vs group" and not st.session_state.df_a.empty and
     c5.metric(f"PR {sys_metric}", fmt(pr_score), get_pctl_ath(pr_score, sys_metric))
 
     st.markdown("---")
-    render_group_tab(df_a, cfg_g)
+    u_bodyweight = ath_df['Bodyweight'].iloc[-1] if not ath_df.empty else 0.0
+    user_data = {"Name": ath_df['Name'].iloc[0], "Total": pr_total, "Squat": pr_sq, "Bench": pr_bn, "Deadlift": pr_dl, "Bodyweight": u_bodyweight, sys_metric: pr_score}
+    render_group_tab(df_a, cfg_g, user_data=user_data)
 
 elif analysis_mode == "Group vs group":
     df_a, df_b = st.session_state.df_a, st.session_state.df_b
@@ -1432,18 +1459,62 @@ elif analysis_mode == "Group vs group":
         combined = pd.concat([df_a, df_b])
         
         st.subheader(f"Head-to-Head: {name_a} vs {name_b}", anchor=False)
-        st.columns(2)
         s1, s2 = st.columns(2)
         s1.metric(f"{name_a} Athletes", len(df_a), f"Avg Total: {(df_a['Total'].mean()*mult):.1f}")
         s2.metric(f"{name_b} Athletes", len(df_b), f"Avg Total: {(df_b['Total'].mean()*mult):.1f}")
         
+        st.markdown("#### Statistical Comparison")
+        comp_metrics = ["Total", st.session_state.score_sys, "Squat", "Bench", "Deadlift", "Bodyweight", "Age"]
+        sel_comp_met = st.selectbox("Wybierz metrykę do porównania:", comp_metrics)
+        
+        def get_stats(df_group, col):
+            if df_group.empty or col not in df_group.columns: return {}
+            s = df_group[df_group[col] > 0][col].dropna() if col not in ["Age", "Bodyweight"] else df_group[col].dropna()
+            if s.empty: return {}
+            m = mult if col in ["Total", "Squat", "Bench", "Deadlift"] else 1.0
+            s = s * m
+            return {
+                "Average": s.mean(), "Median": s.median(),
+                "Top 10% (P90)": s.quantile(0.90), "Top 1% (P99)": s.quantile(0.99),
+                "Bottom 10% (P10)": s.quantile(0.10)
+            }
+        
+        stats_a = get_stats(df_a, sel_comp_met)
+        stats_b = get_stats(df_b, sel_comp_met)
+        df_stats = pd.DataFrame([stats_a, stats_b], index=[name_a, name_b]).T
+        st.dataframe(df_stats.style.format("{:.1f}"), use_container_width=True)
+        
+        st.markdown("---")
         fig = px.histogram(combined, x=combined["Total"]*mult, color="Group Label", barmode="overlay", title="Total Distribution Overlay")
         st.plotly_chart(fig, use_container_width=True)
         
-        fig_s = px.scatter(combined, x="Bodyweight", y=st.session_state.score_sys, color="Group Label", title=f"{st.session_state.score_sys} vs Bodyweight Overlay", hover_data=["Name"])
+        fig_s = px.scatter(combined, x="Bodyweight", y=st.session_state.score_sys, color="Group Label", title=f"{st.session_state.score_sys} vs Bodyweight Overlay", hover_data=["Name", "Total"])
         st.plotly_chart(fig_s, use_container_width=True)
         
-        render_competition_section(combined, {"group_name": f"{name_a} vs {name_b}"})
+        st.markdown("---")
+        st.subheader("Combined Groups Leaderboard", anchor=False)
+        
+        combined_sorted = combined.sort_values(by=st.session_state.score_sys, ascending=False).reset_index(drop=True)
+        combined_sorted.insert(0, "Rank", range(1, len(combined_sorted) + 1))
+        
+        avail_cols = list(combined_sorted.columns)
+        default_cols = ["Rank", "Group Label", "Name", "Age", "WeightClass", "Bodyweight", "Total", st.session_state.score_sys, "Country", "Tested", "Equipment", "Federation"]
+        sel_cols = st.multiselect("Dodaj więcej danych do tabeli:", avail_cols, default=[c for c in default_cols if c in avail_cols], key="gvg_cols")
+        
+        def color_groups(row):
+            if row["Group Label"] == name_a:
+                return ['background-color: rgba(30, 144, 255, 0.15)'] * len(row)
+            else:
+                return ['background-color: rgba(255, 99, 71, 0.15)'] * len(row)
+
+        display_df = combined_sorted[sel_cols].copy()
+        
+        for c in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]: 
+            if c in display_df.columns: display_df[c] = (display_df[c] * mult).round(1)
+        for c in ["Dots", "Wilks", "GL Points"]: 
+            if c in display_df.columns: display_df[c] = display_df[c].round(2)
+            
+        st.dataframe(display_df.style.apply(color_groups, axis=1), use_container_width=True)
 
 elif analysis_mode == "Athlete":
     ath_df_raw = st.session_state.ath_df
