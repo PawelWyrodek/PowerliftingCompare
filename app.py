@@ -400,15 +400,15 @@ def build_query(cfg):
     return query, final_params
 
 def run_group_analysis(cfg):
-    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     conn = get_duckdb_connection()
     query, params = build_query(cfg)
     df_res = conn.execute(query, params).df()
 
     if df_res.empty: return df_res
     
+    # Formatowanie daty dopiero GDY df_res istnieje i nie jest puste
+    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     df_res["Age"] = df_res["Age"].fillna(0).astype(int)
-    df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce')
     
     df_res.rename(columns={
         "TotalKg": "Total", "Best3SquatKg": "Squat", "Best3BenchKg": "Bench", 
@@ -612,7 +612,7 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
         score_min, score_max = numeric_range_input("Score Range", 0.0, 1500.0, 0.0, 1500.0, 5.0, prefix)
     with c2:
         long_min, long_max = numeric_range_input("Experience (Years)", 0.0, 40.0, 0.0, 40.0, 0.5, prefix)
-        meet_min, meet_max = numeric_range_input("Meet# Range", 1, 500, 1, 500, 1, prefix)
+        meet_min, meet_max = numeric_range_input("Meet# Range", 1, 500, 1, 100, 1, prefix, slider_max=100)
         tot_min, tot_max = numeric_range_input("Total Range", 0.0, 1500.0, 0.0, 1500.0, 2.5, prefix)
     with c3:
         sq_min, sq_max = numeric_range_input("Squat Range", 0.0, 600.0, 0.0, 600.0, 2.5, prefix)
@@ -1163,6 +1163,102 @@ elif analysis_mode == "Competition":
 
 elif analysis_mode == "Calculators":
     st.session_state.submit_clicked = False
+    
+    st.header("Powerlifting Calculators", anchor=False)
+    
+    calc_mode = st.radio("Select Mode", ["Standard Calculator", "Reverse Calculator"], horizontal=True)
+    st.markdown("---")
+
+    # Funkcje pomocnicze do punktacji
+    def calc_points(bw, tot, sex, system):
+        if bw <= 0 or tot <= 0: return 0.0
+        if system == "Dots":
+            if sex == "M": denom = -0.000001093 * (bw ** 4) + 0.0007391293 * (bw ** 3) -0.1918759221 * (bw ** 2) + 24.0900756 * bw - 307.75076
+            else: denom = -0.000010706 * (bw ** 4) + 0.005158568 * (bw ** 3) -0.92501065 * (bw ** 2) + 75.323049 * bw - 516.39869
+            return tot * (500.0 / denom) if denom != 0 else 0
+        elif system == "Wilks":
+            if sex == "M": denom = -216.0475144 + 16.2606339*bw -0.002388645*(bw**2) -0.00113732*(bw**3) + 7.01863E-06*(bw**4) -1.291E-08*(bw**5)
+            else: denom = 594.3174777 -27.23842536*bw + 0.821122268*(bw**2) -0.009307339*(bw**3) + 4.73158E-05*(bw**4) -9.054E-08*(bw**5)
+            return tot * (500.0 / denom) if denom != 0 else 0
+        elif system == "GL Points":
+            if sex == "M": denom = 1199.72839 - 925.40462 * np.exp(-0.00510531 * bw)
+            else: denom = 610.79046 - 451.04414 * np.exp(-0.00735665 * bw)
+            return tot * (100.0 / denom) if denom != 0 else 0
+        return 0.0
+
+    if calc_mode == "Standard Calculator":
+        c1, c2 = st.columns(2)
+        with c1:
+            bw = st.number_input("Bodyweight", min_value=30.0, max_value=300.0, value=72.0, step=0.5)
+            sex = st.selectbox("Sex", ["M", "F"])
+        with c2:
+            sq = st.number_input("Squat", min_value=0.0, value=200.0, step=2.5)
+            bn = st.number_input("Bench Press", min_value=0.0, value=120.0, step=2.5)
+            dl = st.number_input("Deadlift", min_value=0.0, value=330.0, step=2.5)
+            
+        tot = sq + bn + dl
+        st.markdown(f"### Total: **{tot:.1f}**")
+        
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Dots", f"{calc_points(bw, tot, sex, 'Dots'):.2f}")
+        sc2.metric("Wilks", f"{calc_points(bw, tot, sex, 'Wilks'):.2f}")
+        sc3.metric("GL Points", f"{calc_points(bw, tot, sex, 'GL Points'):.2f}")
+
+    else:
+        st.markdown("Calculate required lifts based on a target Total or Points goal.")
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            target_metric = st.selectbox("Calculate for", ["Total", "Dots", "Wilks", "GL Points"])
+        with c2:
+            target_val = st.number_input("Target Value", min_value=1.0, value=650.0, step=2.5)
+        with c3:
+            bw_rc = st.number_input("Bodyweight", min_value=30.0, max_value=300.0, value=72.0, step=0.5)
+            sex_rc = st.selectbox("Sex ", ["M", "F"])
+
+        st.markdown("#### Lift Proportions")
+        st.caption("Adjust the sliders below to balance your lifts.")
+        
+        sl1, sl2 = st.columns(2)
+        with sl1:
+            sq_bn_ratio = st.slider(
+                "🔴 Squat / Bench Ratio", 
+                min_value=0.5, max_value=3.0, value=1.66, step=0.01,
+                help="E.g., 1.5 means your Squat is 50% heavier than your Bench."
+            )
+        with sl2:
+            bn_dl_ratio = st.slider(
+                "🔵 Bench / Deadlift Ratio", 
+                min_value=0.2, max_value=1.5, value=0.36, step=0.01,
+                help="E.g., 0.5 means your Bench is exactly half of your Deadlift."
+            )
+
+        # Odwracanie punktacji na wymagany Total
+        req_total = target_val
+        if target_metric != "Total":
+            test_points = calc_points(bw_rc, 1000.0, sex_rc, target_metric) # liczymy punkty dla tony by zdobyć mnożnik
+            if test_points > 0:
+                multiplier = test_points / 1000.0
+                req_total = target_val / multiplier
+            else:
+                req_total = 0.0
+
+        if req_total > 0:
+            # Matematyka relacji:
+            # Total = Sq + Bn + Dl
+            # Sq = Bn * sq_bn_ratio
+            # Dl = Bn / bn_dl_ratio
+            # Total = Bn * sq_bn_ratio + Bn + Bn / bn_dl_ratio
+            
+            calc_bn = req_total / (sq_bn_ratio + 1.0 + (1.0 / bn_dl_ratio))
+            calc_sq = calc_bn * sq_bn_ratio
+            calc_dl = calc_bn / bn_dl_ratio
+
+            st.success(f"Required Total: **{req_total:.1f}**")
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Required Squat", f"{calc_sq:.1f}")
+            rc2.metric("Required Bench", f"{calc_bn:.1f}")
+            rc3.metric("Required Deadlift", f"{calc_dl:.1f}")
 
 
 # ---------------------------------------------------------------------------
@@ -1583,46 +1679,3 @@ elif analysis_mode == "Competition" and st.session_state.get("df_comp") is not N
     
     render_competition_section(df_filtered, {"group_name": st.session_state.comp_name})
 
-elif analysis_mode == "Calculators":
-    st.header("Calculators & Strength Standards")
-    
-    calc_mode = st.selectbox(
-        "Select Calculator Tool",
-        ["Reverse Calculator (Target Points to Lifts)", "Strength Standards & Estimation"]
-    )
-    
-    if calc_mode == "Reverse Calculator (Target Points to Lifts)":
-        st.markdown("### Reverse Calculator")
-        
-        # Default target scores from keyboard inputs
-        col_pts1, col_pts2, col_pts3 = st.columns(3)
-        target_gl = col_pts1.number_input("Target GL Points", value=100.0, step=1.0)
-        target_dots = col_pts2.number_input("Target Dots", value=400.0, step=1.0)
-        target_wilks = col_pts3.number_input("Target Wilks", value=400.0, step=1.0)
-
-        st.markdown("### Lift Proportions (Sum must equal 100%)")
-        
-        # Range slider with two handles splits the bar into 3 zones: (0 to A), (A to B), (B to 100)
-        splits = st.slider(
-            "Lift proportions slider S / B / D", 
-            min_value=0, max_value=100, 
-            value=(35, 60), 
-            step=1, 
-            label_visibility="collapsed"
-        )
-        
-        def_sq = splits[0]
-        def_bn = splits[1] - splits[0]
-        def_dl = 100 - splits[1]
-
-        c1, c2, c3 = st.columns(3)
-        pct_sq = c1.number_input("Squat (%)", min_value=0, max_value=100, value=def_sq)
-        pct_bn = c2.number_input("Bench (%)", min_value=0, max_value=100, value=def_bn)
-        pct_dl = c3.number_input("Deadlift (%)", min_value=0, max_value=100, value=def_dl)
-        
-        if (pct_sq + pct_bn + pct_dl) != 100:
-            st.warning(f"The sum of proportions is {pct_sq + pct_bn + pct_dl}%. Please adjust the fields to total exactly 100%.")
-            
-    elif calc_mode == "Strength Standards & Estimation":
-        st.markdown("### Strength Standards")
-        st.info("Evaluate your performance against standard powerlifting classifications.")
