@@ -1416,7 +1416,7 @@ if analysis_mode in ["Group", "Result vs group"] and not st.session_state.df_a.e
             
         st.markdown("---")
         u_score_val = u_score if 'u_score' in locals() else 0.0
-        user_data = {"Name": "Twój Cel", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
+        user_data = {"Name": "Result", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
         if not df_a.empty: render_group_tab(df_a, cfg_a_mem, exact_bw_target=u_bw, user_data=user_data)
         
     elif analysis_mode == "Group":
