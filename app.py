@@ -21,11 +21,11 @@ DATA_URL = "https://github.com/PawelWyrodek/PowerliftingCompare/releases/downloa
 @st.cache_resource
 def get_duckdb_connection():
     conn = duckdb.connect()
-    # Required to read Parquet files directly over HTTPS
+    # Required for reading Parquet files directly over HTTPS
     conn.execute("INSTALL httpfs;")
     conn.execute("LOAD httpfs;")
     
-    # Create a view over the remote Parquet file without loading the full dataset into Pandas
+    # Create a DuckDB view over the remote Parquet file without loading it into Pandas memory
     conn.execute(f"""
         CREATE OR REPLACE VIEW clean_db AS
         SELECT * REPLACE (
@@ -56,50 +56,111 @@ def get_duckdb_connection():
         FROM read_parquet('{DATA_URL}');
     """)
     return conn
+st.markdown("""
+    <style>
+        div[data-testid="InputInstructions"] { display: none !important; }
+        .block-container { padding-top: 3rem; padding-bottom: 3rem; }
+        a.header-anchor { display: none !important; }
+        div[data-testid="stHeader"] a { display: none !important; }
+        h1:hover a, h2:hover a, h3:hover a { display: none !important; }
+    </style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# INITIALIZATION & STATE MANAGEMENT
+# ---------------------------------------------------------------------------
+for key in ["df_a", "df_b", "ath_df", "ath_df_a", "ath_df_b", "df_comp"]:
+    if key not in st.session_state:
+        st.session_state[key] = pd.DataFrame()
+        
+# Read URL only on the FIRST app launch to avoid conflict with menu changes
+if "app_initialized" not in st.session_state:
+    params = st.query_params
+    if "mode" in params:
+        st.session_state.active_mode = params["mode"]
+    else:
+        st.session_state.active_mode = "Result vs group"
+        
+    if params.get("mode") == "Athlete" and "athlete" in params:
+        st.session_state.ath_selected = urllib.parse.unquote(params["athlete"])
+        st.session_state.submit_clicked = True
+        
+    st.session_state.app_initialized = True
+
+if "active_mode" not in st.session_state: 
+    st.session_state.active_mode = "Result vs group"
+
+if "score_sys" not in st.session_state: st.session_state.score_sys = "Dots"
+if "submit_clicked" not in st.session_state: st.session_state.submit_clicked = False
 
 def fmt(val):
-    """Format numeric values consistently for compact table output."""
-    if pd.isna(val):
-        return ""
-    value = float(val)
-    return f"{int(value)}" if value == int(value) else f"{value:.1f}"
-
+    if pd.isna(val): return ""
+    val = float(val)
+    return f"{int(val)}" if val == int(val) else f"{val:.1f}"
 
 def format_attempt(val):
-    """Format a lift attempt and mark negative values as failed attempts."""
-    if pd.isna(val) or val == 0:
-        return ""
-    value = float(val)
-    if value < 0:
-        return f"{abs(value)} (Failed)"
-    return str(value)
-
+    if pd.isna(val) or val == 0: return ""
+    f_val = float(val)
+    if f_val < 0: return f"{abs(f_val)} (Failed)"
+    return str(f_val)
 
 def normalize_meet_name(name):
-    """Normalize competition names so the same meet can be matched across years."""
-    if not isinstance(name, str):
-        return ""
-    normalized = re.sub(r"\b\d+(st|nd|rd|th)\b", "", name, flags=re.IGNORECASE)
-    normalized = re.sub(r"\b\d{4}\b", "", normalized)
-    normalized = re.sub(r"\bannual\b", "", normalized, flags=re.IGNORECASE)
-    return " ".join(normalized.split()).strip()
-
+    if not isinstance(name, str): return ""
+    n = re.sub(r'\b\d+(st|nd|rd|th)\b', '', name, flags=re.IGNORECASE)
+    n = re.sub(r'\b\d{4}\b', '', n)
+    n = re.sub(r'\bannual\b', '', n, flags=re.IGNORECASE)
+    return " ".join(n.split()).strip()
 
 def calc_1rm(weight, reps):
-    """Estimate one-repetition maximum using the Epley formula."""
-    if reps <= 1:
-        return weight
-    return weight * (1.0 + reps / 30.0)
-
+    if reps <= 1: return weight
+    return weight * (1.0 + (reps / 30.0))
 
 def sort_weight_class(value):
-    """Convert weight-class labels into numeric values for stable sorting."""
-    value_str = str(value).replace("+", "").strip()
-    try:
-        return float(value_str)
-    except ValueError:
-        return 9999.0
+    s = str(value).replace('+', '').strip()
+    try: return float(s)
+    except ValueError: return 9999.0
 
+# ---------------------------------------------------------------------------
+# DUCKDB CONNECTION & DATA WASHER
+# ---------------------------------------------------------------------------
+@st.cache_resource
+def get_duckdb_connection():
+    conn = duckdb.connect()
+    # Required for reading Parquet files directly over HTTPS
+    conn.execute("INSTALL httpfs;")
+    conn.execute("LOAD httpfs;")
+    
+    # Create a DuckDB view over the remote Parquet file without loading it into Pandas memory
+    conn.execute(f"""
+        CREATE OR REPLACE VIEW clean_db AS
+        SELECT * REPLACE (
+            TRY_CAST(Date AS DATE) as Date,
+            TRY_CAST(Age AS DOUBLE) as Age,
+            TRY_CAST(BodyweightKg AS DOUBLE) as BodyweightKg,
+            TRY_CAST(Best3SquatKg AS DOUBLE) as Best3SquatKg,
+            TRY_CAST(Best3BenchKg AS DOUBLE) as Best3BenchKg,
+            TRY_CAST(Best3DeadliftKg AS DOUBLE) as Best3DeadliftKg,
+            TRY_CAST(TotalKg AS DOUBLE) as TotalKg,
+            TRY_CAST(Dots AS DOUBLE) as Dots,
+            TRY_CAST(Wilks AS DOUBLE) as Wilks,
+            TRY_CAST(Squat1Kg AS DOUBLE) as Squat1Kg,
+            TRY_CAST(Squat2Kg AS DOUBLE) as Squat2Kg,
+            TRY_CAST(Squat3Kg AS DOUBLE) as Squat3Kg,
+            TRY_CAST(Bench1Kg AS DOUBLE) as Bench1Kg,
+            TRY_CAST(Bench2Kg AS DOUBLE) as Bench2Kg,
+            TRY_CAST(Bench3Kg AS DOUBLE) as Bench3Kg,
+            TRY_CAST(Deadlift1Kg AS DOUBLE) as Deadlift1Kg,
+            TRY_CAST(Deadlift2Kg AS DOUBLE) as Deadlift2Kg,
+            TRY_CAST(Deadlift3Kg AS DOUBLE) as Deadlift3Kg
+        ),
+        CASE WHEN Sex = 'M' THEN
+            TRY_CAST(TotalKg AS DOUBLE) * 100.0 / (1199.72839 - 925.40462 * EXP(-0.00510531 * TRY_CAST(BodyweightKg AS DOUBLE)))
+        WHEN Sex = 'F' THEN
+            TRY_CAST(TotalKg AS DOUBLE) * 100.0 / (610.79046 - 451.04414 * EXP(-0.00735665 * TRY_CAST(BodyweightKg AS DOUBLE)))
+        ELSE NULL END as GLPoints
+        FROM read_parquet('{DATA_URL}');
+    """)
+    return conn
 
 @st.cache_data
 def load_countries_and_continents():
@@ -161,7 +222,7 @@ def load_weight_class_options():
         return sorted(list(options), key=lambda x: sort_weight_class(x))
     except Exception: return []
 
-# Initialize cached lookup data used by the filter controls
+# Initialize zero-argument functions
 display_countries, country_to_continent = load_countries_and_continents()
 feds_list, parent_feds_list, fed_to_parent = load_federations()
 weight_class_options = load_weight_class_options()
@@ -302,7 +363,7 @@ def build_query(cfg):
             limit_sql = ""
         else:
             limit_sql = f"LIMIT {int(limit_val)}"
-    except (TypeError, ValueError):
+    except: 
         limit_sql = ""
 
     query = f"""
@@ -344,9 +405,7 @@ def build_query(cfg):
     final_params = base_params + base_params + filtered_params
     return query, final_params
 
-@st.cache_data(show_spinner=False)
 def run_group_analysis(cfg):
-    """Run a group analysis once per unique filter configuration and cache the result."""
     conn = get_duckdb_connection()
     query, params = build_query(cfg)
     df_res = conn.execute(query, params).df()
@@ -383,68 +442,31 @@ def check_weight_conflict(cfg):
             st.warning("Warning: Your selected Bodyweight Range might not completely overlap with the chosen Weight classes. Some athletes may be naturally lighter than their upper weight class limit.")
 
 def render_dataframe(df_disp, key_prefix="table", set_index=None):
-    """Render a compact, searchable dataframe without unnecessary full-table work."""
     if df_disp is None or df_disp.empty:
-        st.dataframe(
-            df_disp,
-            use_container_width=True,
-            hide_index=set_index is None,
-            height=180,
-        )
+        st.dataframe(df_disp, use_container_width=True)
         return
 
-    display_df = df_disp
-
-    # Apply the optional athlete search before creating links or other display-only
-    # values. This avoids transforming rows that the user has already filtered out.
-    if "Name" in display_df.columns:
-        search_value = st.text_input(
-            "Search athlete name:",
-            key=f"{key_prefix}_search",
-            placeholder="Type a name to filter the table",
-        ).strip()
-
-        if search_value:
-            name_mask = display_df["Name"].astype(str).str.contains(
-                search_value,
-                case=False,
-                na=False,
-                regex=False,
-            )
-            display_df = display_df.loc[name_mask]
-
-        # Streamlit LinkColumn expects the cell value to contain the target URL.
-        # Only build URLs for rows that are actually going to be displayed.
-        if not display_df.empty:
-            display_df = display_df.copy()
-            display_df["Name"] = display_df["Name"].map(
-                lambda name: (
-                    f"?mode=Athlete&athlete={urllib.parse.quote(str(name))}"
-                    f"#{str(name)}"
-                )
-            )
-
-        column_config = {
-            "Name": st.column_config.LinkColumn(
-                "Name",
-                display_text=r"#(.*)",
-            )
-        }
+    df_disp = df_disp.copy()
+    config = {}
+    
+    if "Name" in df_disp.columns:
+        search_val = st.text_input("Search Athlete Name:", key=f"{key_prefix}_search").strip().lower()
+        if search_val:
+            mask = df_disp["Name"].astype(str).str.lower().str.contains(search_val, na=False)
+            df_disp = df_disp[mask]
+        
+        def make_url(name):
+            n_str = str(name)
+            enc_name = urllib.parse.quote(n_str)
+            return f"?mode=Athlete&athlete={enc_name}#{n_str}"
+        
+        df_disp["Name"] = df_disp["Name"].apply(make_url)
+        config["Name"] = st.column_config.LinkColumn("Name", display_text=r"#(.*)")
+        
+    if set_index and set_index in df_disp.columns:
+        st.dataframe(df_disp.set_index(set_index), use_container_width=True, column_config=config)
     else:
-        column_config = {}
-
-    if set_index and set_index in display_df.columns:
-        display_df = display_df.set_index(set_index)
-
-    # A fixed-height viewport keeps large leaderboards responsive while still
-    # allowing Streamlit's dataframe component to virtualize visible rows.
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=set_index is None,
-        height=620,
-        column_config=column_config,
-    )
+        st.dataframe(df_disp, use_container_width=True, column_config=config)
 
 # ---------------------------------------------------------------------------
 # UI HELPERS & COMPONENTS
@@ -481,21 +503,21 @@ def numeric_range_input(label, min_val, max_val, default_low, default_high, step
 
     return st.session_state[min_key], st.session_state[max_key]
 
-# Searchable athlete selector that avoids loading the full athlete list into the UI
-def render_athlete_selectbox(label, key):
+# SAFE ATHLETE RENDERING (Solves the problem of app freezing with a large number of options)
+def render_athlete_selectbox(label, key, _data):
     search_key = f"{key}_search_input"
     current_val = st.session_state.get(key, None)
     
-    # Use a text field so the browser never receives the full athlete list.
+    # Step 1: Text input for dynamic search
     search_term = st.text_input(f"{label} (min. 3 characters):", key=search_key)
     
     options = []
         
-    # Query DuckDB only after the user has entered enough characters to make the search useful.
+    # If user types at least 3 characters, query the database
     if search_term and len(search_term) >= 3:
         try:
             conn = get_duckdb_connection()
-            # Split the search into terms so partial matches can find first or last names
+            # Split the search into words so partial name matches work reliably
             search_terms = search_term.strip().split()
             conditions = " AND ".join(["Name ILIKE ?" for _ in search_terms])
             params = [f"%{t}%" for t in search_terms]
@@ -503,48 +525,18 @@ def render_athlete_selectbox(label, key):
             if not res.empty:
                 options.extend(res['Name'].tolist())
         except Exception:
-            options = []
+            pass
             
-    # Preserve a selection restored from the URL or a previous search.
+    # Keep the previous selection (e.g., from URL or previous search)
     if current_val and current_val != "Type above to search..." and current_val not in options:
         options.insert(0, current_val)
     
-    # Show only matching records in the selectbox to keep the widget lightweight.
+    # Step 2: Selectbox limited to search results (safe for Streamlit)
     if options:
         return st.selectbox("Select exact match:", options=options, key=key)
     else:
-        # Keep the same widget key so Streamlit does not create duplicate state.
+        # Added missing key=key, resolving the ID conflict
         return st.selectbox("Select exact match:", options=["Type above to search..."], disabled=True, key=key)
-
-# ---------------------------------------------------------------------------
-# INITIALIZATION & STATE MANAGEMENT
-# ---------------------------------------------------------------------------
-# Streamlit creates session state keys lazily. Initialize every key that is
-# accessed before a widget callback can create it, so a fresh session never
-# fails during the first script run.
-for key in ["df_a", "df_b", "ath_df", "ath_df_a", "ath_df_b", "df_comp"]:
-    if key not in st.session_state:
-        st.session_state[key] = pd.DataFrame()
-
-# Read URL parameters only once. This preserves deep links without allowing
-# normal widget interactions to be overwritten on subsequent reruns.
-if "app_initialized" not in st.session_state:
-    params = st.query_params
-    st.session_state.active_mode = params.get("mode", "Result vs group")
-
-    if params.get("mode") == "Athlete" and params.get("athlete"):
-        st.session_state.ath_selected = urllib.parse.unquote(params["athlete"])
-        st.session_state.submit_clicked = True
-
-    st.session_state.app_initialized = True
-
-# Defensive defaults for a completely fresh Streamlit session.
-if "active_mode" not in st.session_state:
-    st.session_state.active_mode = "Result vs group"
-if "score_sys" not in st.session_state:
-    st.session_state.score_sys = "Dots"
-if "submit_clicked" not in st.session_state:
-    st.session_state.submit_clicked = False
 
 # ---------------------------------------------------------------------------
 # MAIN LAYOUT
@@ -560,10 +552,17 @@ def change_mode():
     st.session_state.active_mode = st.session_state._mode_radio
     st.query_params["mode"] = st.session_state._mode_radio
     st.session_state.submit_clicked = False
+MODES = ["Result vs group", "Athlete vs group", "Group", "Group vs group", "Athlete", "Athlete vs athlete", "Competition", "Calculators"]
 
-# Validate URL or persisted state before using it as the radio index.
+def change_mode():
+    st.session_state.active_mode = st.session_state._mode_radio
+    st.query_params["mode"] = st.session_state._mode_radio
+    st.session_state.submit_clicked = False
+
+# --- ADD THIS VALIDATION CHECK ---
 if st.session_state.active_mode not in MODES:
-    st.session_state.active_mode = "Result vs group"
+    st.session_state.active_mode = "Result vs group" # Fallback to default
+# ---------------------------------
 
 analysis_mode = st.sidebar.radio("Select Analysis Mode", MODES, index=MODES.index(st.session_state.active_mode), key="_mode_radio", on_change=change_mode)
 
@@ -585,12 +584,24 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
     
     with col2:
         st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Date</span>", unsafe_allow_html=True)
-        date_preset = st.selectbox("Date", ["Any", "Last week", "Last month", "Last year", "Custom"], key=f"{prefix}_date_preset", label_visibility="collapsed")
+        date_preset = st.selectbox("Date", ["Any", "This week", "This month", "This year", "Last 7 days", "Last 30 days", "Last 365 days", "Custom"], key=f"{prefix}_date_preset", label_visibility="collapsed")
         today = date.today()
         if date_preset == "Any": start_date, end_date = "1970-01-01", today.strftime("%Y-%m-%d")
-        elif date_preset == "Last week": start_date, end_date = (today - timedelta(days=7)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-        elif date_preset == "Last month": start_date, end_date = (today - timedelta(days=30)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-        elif date_preset == "Last year": start_date, end_date = (today - timedelta(days=365)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "This week":
+            week_start = today - timedelta(days=today.weekday())
+            start_date, end_date = week_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "This month":
+            month_start = today.replace(day=1)
+            start_date, end_date = month_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "This year":
+            year_start = today.replace(month=1, day=1)
+            start_date, end_date = year_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "Last 7 days":
+            start_date, end_date = (today - timedelta(days=7)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "Last 30 days":
+            start_date, end_date = (today - timedelta(days=30)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        elif date_preset == "Last 365 days":
+            start_date, end_date = (today - timedelta(days=365)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
         else:
             st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Custom date range</span>", unsafe_allow_html=True)
             date_range = st.date_input("Custom date range", value=(date(1970, 1, 1), today), key=f"{prefix}_date_custom", label_visibility="collapsed")
@@ -675,7 +686,7 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
 
 def format_wc(val, u):
     if isinstance(val, str) and not val.replace('.', '', 1).isdigit():
-        return f"{val} {u}" # Obejmuje "120+", "All" itp.
+        return f"{val} {u}" # Covers values such as "120+" and "All".
     try:
         f_val = float(val)
         return f"{int(f_val)} {u}" if f_val % 1 == 0 else f"{f_val} {u}"
@@ -700,39 +711,56 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
         if exact_bw_target is not None and exact_bw_target > 0:
             exact_bw = exact_bw_target
             exact_bw_kg = exact_bw / mult if use_lbs else exact_bw
-            st.info(f"Interpolated standards for your exact Bodyweight: {exact_bw} {unit}")
-            
-            agg_df = valid_df.groupby('WeightClass')[target_metric].quantile([0.1667, 0.3333, 0.5000, 0.6667, 0.8333]).unstack()
-            agg_df = agg_df * mult
-            
-            if agg_df.empty or len(agg_df) < 2:
-                st.warning("Not enough weight classes in filtered data to interpolate.")
-                return
+            st.info(f"Strength standards for {exact_bw} {unit} and for the full reference group.")
 
-            # Convert weight class strings to sorted numeric floats for np.interp
+            quantiles = [0.1667, 0.3333, 0.5000, 0.6667, 0.8333]
+            rows = []
+
+            # The first row represents the requested bodyweight. Standards are interpolated
+            # between available weight classes so the row matches the athlete's exact weight.
+            agg_df = valid_df.groupby('WeightClass')[target_metric].quantile(quantiles).unstack()
+            agg_df = agg_df * mult
             numeric_wcs = np.array([sort_weight_class(wc) for wc in agg_df.index], dtype=float)
             sort_idx = np.argsort(numeric_wcs)
-            
             wcs = numeric_wcs[sort_idx]
-            
-            interp_vals = []
-            for col in agg_df.columns:
-                fp = np.asarray(agg_df[col].values, dtype=float)[sort_idx]
-                interp_vals.append(np.interp(exact_bw_kg, wcs, fp))
-            
-            exact_df = pd.DataFrame([interp_vals], columns=["Beginner", "Novice", "Intermediate", "Advanced", "Elite"], index=[f"{exact_bw} {unit}"])
-            exact_df = exact_df.round(1)
-            st.dataframe(
-                exact_df,
-                use_container_width=True,
-                column_config={
-                    "Beginner": st.column_config.NumberColumn("Beginner", help="Better than 16.6%"),
-                    "Novice": st.column_config.NumberColumn("Novice", help="Better than 33.3%"),
-                    "Intermediate": st.column_config.NumberColumn("Intermediate", help="Better than 50.0%"),
-                    "Advanced": st.column_config.NumberColumn("Advanced", help="Better than 66.6%"),
-                    "Elite": st.column_config.NumberColumn("Elite", help="Better than 83.3%"),
-                }
-            )
+
+            if len(wcs) >= 2 and exact_bw_kg > 0:
+                interp_vals = []
+                for col in agg_df.columns:
+                    fp = np.asarray(agg_df[col].values, dtype=float)[sort_idx]
+                    interp_vals.append(np.interp(exact_bw_kg, wcs, fp))
+                rows.append({
+                    "Population": f"Your bodyweight ({exact_bw} {unit})",
+                    "Beginner": interp_vals[0],
+                    "Novice": interp_vals[1],
+                    "Intermediate": interp_vals[2],
+                    "Advanced": interp_vals[3],
+                    "Elite": interp_vals[4],
+                })
+            else:
+                all_q = valid_df[target_metric].quantile(quantiles) * mult
+                rows.append({
+                    "Population": f"Your bodyweight ({exact_bw} {unit})",
+                    "Beginner": all_q.iloc[0],
+                    "Novice": all_q.iloc[1],
+                    "Intermediate": all_q.iloc[2],
+                    "Advanced": all_q.iloc[3],
+                    "Elite": all_q.iloc[4],
+                })
+
+            # The second row ignores weight classes and describes the complete reference group.
+            all_q = valid_df[target_metric].quantile(quantiles) * mult
+            rows.append({
+                "Population": "Full group",
+                "Beginner": all_q.iloc[0],
+                "Novice": all_q.iloc[1],
+                "Intermediate": all_q.iloc[2],
+                "Advanced": all_q.iloc[3],
+                "Elite": all_q.iloc[4],
+            })
+
+            exact_df = pd.DataFrame(rows).round(1)
+            st.dataframe(exact_df, use_container_width=True)
             return
 
         col1, col2 = st.columns(2)
@@ -826,16 +854,38 @@ def render_competition_section(df_src, cfg):
     with comp_tabs[0]:
         st.write("Compare categories or athletes based on performance.")
         
-        valid_wcs = sorted([w for w in df_src['WeightClass'].dropna().astype(str).unique() if w in load_weight_class_options()], key=sort_weight_class)
-        sel_comp_wcs = st.multiselect("Select Weight Classes for Chart", valid_wcs, default=valid_wcs, key=f"{cfg['group_name']}_comp_wc")
-        comp_metric = st.selectbox("Select Metric", ["Total", "Dots", "Wilks", "GL Points"], key=f"{cfg['group_name']}_comp_metric")
-        
-        c_df = df_src[df_src['WeightClass'].astype(str).isin(sel_comp_wcs)].copy()
-        if not c_df.empty:
+        chart_scope = st.radio(
+            "Chart population",
+            ["All athletes", "Selected weight classes"],
+            horizontal=True,
+            key=f"{cfg['group_name']}_comp_scope"
+        )
+        if chart_scope == "Selected weight classes":
+            valid_wcs = sorted(
+                df_src['WeightClass'].dropna().astype(str).unique().tolist(),
+                key=sort_weight_class
+            )
+            sel_comp_wcs = st.multiselect(
+                "Select Weight Classes for Chart",
+                valid_wcs,
+                default=valid_wcs,
+                key=f"{cfg['group_name']}_comp_wc"
+            )
+            c_df = df_src[df_src['WeightClass'].astype(str).isin(sel_comp_wcs)].copy()
+        else:
+            c_df = df_src.copy()
+
+        comp_metric = st.selectbox(
+            "Select Metric",
+            ["Total", "Dots", "Wilks", "GL Points", "Squat", "Bench", "Deadlift", "Bodyweight"],
+            key=f"{cfg['group_name']}_comp_metric"
+        )
+        if not c_df.empty and comp_metric in c_df.columns:
+            color_col = "WeightClass" if chart_scope == "Selected weight classes" and c_df["WeightClass"].notna().any() else None
             fig = px.scatter(
-                c_df, x="Bodyweight", y=comp_metric, color="WeightClass",
-                hover_data=["Name", "Total", "Squat", "Bench", "Deadlift"],
-                title=f"{comp_metric} Distribution by Selected Categories"
+                c_df, x="Bodyweight", y=comp_metric, color=color_col,
+                hover_data=[c for c in ["Name", "WeightClass", "Total", "Squat", "Bench", "Deadlift"] if c in c_df.columns],
+                title=f"{comp_metric} by Athlete"
             )
             st.plotly_chart(fig, use_container_width=True)
             
@@ -878,6 +928,18 @@ def render_competition_section(df_src, cfg):
                 title=f"Difficulty Level per Category - All Points ({diff_metric})"
             )
             
+        # Show the overall male and female averages as reference lines regardless of the selected comparison method.
+        if "Sex" in diff_df.columns:
+            sex_means = diff_df.groupby("Sex")[diff_metric].mean().dropna()
+            for sex_label, mean_value in sex_means.items():
+                if sex_label in ["M", "F"]:
+                    fig_diff.add_hline(
+                        y=float(mean_value),
+                        line_dash="dash",
+                        annotation_text=("Men" if sex_label == "M" else "Women") + f" average: {mean_value:.1f}",
+                        annotation_position="top right"
+                    )
+
         st.plotly_chart(fig_diff, use_container_width=True)
 
     with comp_tabs[2]:
@@ -901,7 +963,7 @@ def render_competition_section(df_src, cfg):
         for c in ["Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"]:
             if c in display_t_df.columns: 
                 display_t_df[c] = pd.to_numeric(display_t_df[c], errors='coerce') * mult
-                display_t_df[c] = display_t_df[c].map(format_attempt)
+                display_t_df[c] = display_t_df[c].apply(format_attempt)
                 if use_lbs:
                     new_c = c.replace("Kg", "Lbs")
                     display_t_df.rename(columns={c: new_c}, inplace=True)
@@ -1010,7 +1072,7 @@ def render_group_tab(df_src, cfg, exact_bw_target=None, user_data=None):
             u_y = user_data[y_ax] if y_ax in ["Dots", "Wilks", "GL Points", "Age", "Experience", "Meet#"] else user_data[y_ax] * mult
             fig_custom.add_trace(go.Scatter(
                 x=[u_x], y=[u_y], mode='markers', marker=dict(color='red', size=16, symbol='star', line=dict(color='black', width=2)),
-                name=user_data.get('Name', 'Cel/PR')
+                name=user_data.get('Name', 'Target/PR')
             )
         )
         st.plotly_chart(fig_custom, use_container_width=True)
@@ -1024,35 +1086,22 @@ def render_group_tab(df_src, cfg, exact_bw_target=None, user_data=None):
     df_table["Experience"] = df_table["Experience"].round(1)
     df_table["Date"] = pd.to_datetime(df_table["Date"], errors='coerce').dt.strftime("%Y-%m-%d")
     
-    # Add the rank once, before the column selector, so the table is built only once.
-    df_table.insert(0, "Rank", range(1, len(df_table) + 1))
+    df_display = df_table.copy()
+    df_display.insert(0, "Rank", range(1, len(df_display) + 1))
+    
+    all_table_cols = list(df_display.columns)
+    default_table_cols = [c for c in ["Rank", "Name", "Age", "Bodyweight", "Date", "MeetName", "Squat", "Bench", "Deadlift", "Total", sys_col, "Place"] if c in all_table_cols]
+    
+    selected_leaderboard_cols = st.multiselect("Customize columns:", all_table_cols, default=default_table_cols, key=f"{cfg['group_name']}_l_cols")
+    display_cols = selected_leaderboard_cols # Keep the selected columns aligned with the rendered table
+    
+    df_display = df_table.copy()
+    df_display.insert(0, "Rank", range(1, len(df_display) + 1))
+    display_cols = [c for c in selected_leaderboard_cols if c in df_display.columns]
+    
+    render_dataframe(df_display[display_cols], key_prefix=f"{cfg['group_name']}_l", set_index="Rank" if "Rank" in display_cols else None)
 
-    all_table_cols = list(df_table.columns)
-    default_table_cols = [
-        c for c in [
-            "Rank", "Name", "Age", "Bodyweight", "Date", "MeetName",
-            "Squat", "Bench", "Deadlift", "Total", sys_col, "Place"
-        ]
-        if c in all_table_cols
-    ]
-
-    selected_leaderboard_cols = st.multiselect(
-        "Customize columns:",
-        all_table_cols,
-        default=default_table_cols,
-        key=f"{cfg['group_name']}_l_cols",
-    )
-    display_cols = [c for c in selected_leaderboard_cols if c in df_table.columns]
-
-    # Keep Rank as a normal column so users can sort it directly in the table.
-    render_dataframe(
-        df_table[display_cols],
-        key_prefix=f"{cfg['group_name']}_leaderboard",
-    )
-
-@st.cache_data(show_spinner=False)
 def fetch_athlete_data(name):
-    """Load an athlete's complete career once and reuse it across Streamlit reruns."""
     conn = get_duckdb_connection()
     q = """
         SELECT p.*,
@@ -1085,6 +1134,13 @@ def apply_athlete_filters(df_src, key_prefix):
         filtered['Tested'] = filtered['Tested'].fillna('No')
 
     st.markdown("#### Filter Athlete Career")
+    event_options = sorted(filtered["Event"].dropna().astype(str).unique().tolist()) if "Event" in filtered.columns else []
+    if event_options:
+        selected_events = st.multiselect(
+            "Event Type", event_options, default=event_options, key=f"{key_prefix}_filt_event"
+        )
+        filtered = filtered[filtered["Event"].astype(str).isin(selected_events)]
+
     cols = st.columns(4)
     filter_keys = ["WeightClass", "Equipment", "Tested", "Federation"]
     
@@ -1147,7 +1203,7 @@ elif analysis_mode == "Result vs group":
 
 elif analysis_mode == "Athlete vs group":
     st.markdown("**Select Athlete**")
-    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected_vg")
+    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected_vg", None)
     st.markdown("---")
     cfg_g = render_group_filters("avg", "Reference Group", default_countries=[])
     if st.button("Run Analysis", use_container_width=True):
@@ -1167,14 +1223,14 @@ elif analysis_mode == "Group vs group":
         st.session_state.cfg_b_req = cfg_b
 
 elif analysis_mode == "Athlete":
-    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected")
+    render_athlete_selectbox("Search Athlete (Type to search):", "ath_selected", None)
     if st.button("Run Analysis", use_container_width=True):
         st.session_state.submit_clicked = True
 
 elif analysis_mode == "Athlete vs athlete":
     col_s1, col_s2 = st.columns(2)
-    with col_s1: render_athlete_selectbox("Select Athlete A:", "ath_a_sel")
-    with col_s2: render_athlete_selectbox("Select Athlete B:", "ath_b_sel")
+    with col_s1: render_athlete_selectbox("Select Athlete A:", "ath_a_sel", None)
+    with col_s2: render_athlete_selectbox("Select Athlete B:", "ath_b_sel", None)
         
     vs_event_opt = st.selectbox("Compare Lift Type (Event):", ["Any", "SBD", "S", "B", "D", "SB", "BD", "SD"], index=0)
     if st.button("Run Analysis", use_container_width=True):
@@ -1211,8 +1267,8 @@ elif analysis_mode == "Calculators":
     calc_mode = st.radio("Select Mode", ["Standard Calculator", "Reverse Calculator"], horizontal=True)
     st.markdown("---")
 
-    # Funkcje pomocnicze do punktacji
-    # Funkcje pomocnicze do punktacji
+    # Scoring helper functions
+    # Scoring helper functions
     def calc_points(bw, tot, sex, system):
         if bw <= 0 or tot <= 0: return 0.0
         if system == "Dots":
@@ -1259,7 +1315,7 @@ elif analysis_mode == "Calculators":
             bw_rc = st.number_input("Bodyweight", min_value=30.0, max_value=300.0, value=72.0, step=0.5)
             sex_rc = st.selectbox("Sex ", ["M", "F"])
 
-        # Recalculate the required total from the selected points system
+        # Convert the selected target metric into the required total.
         req_total = 0.0
         if target_metric == "Total":
             req_total = target_val
@@ -1430,14 +1486,15 @@ if analysis_mode in ["Group", "Result vs group"] and not st.session_state.df_a.e
             
         st.markdown("---")
         u_score_val = u_score if 'u_score' in locals() else 0.0
-        user_data = {"Name": "Target", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
+        user_data = {"Name": "Your Target", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
         if not df_a.empty: render_group_tab(df_a, cfg_a_mem, exact_bw_target=u_bw, user_data=user_data)
         
     elif analysis_mode == "Group":
         if not df_a.empty: render_group_tab(df_a, cfg_a_mem)
 
 elif analysis_mode == "Athlete vs group" and not st.session_state.df_a.empty and not st.session_state.ath_df.empty:
-    ath_df = st.session_state.ath_df
+    ath_df_raw = st.session_state.ath_df
+    ath_df = apply_athlete_filters(ath_df_raw, "ath_vs_group")
     df_a = st.session_state.df_a
     cfg_g = st.session_state.get("cfg_a", {})
     
@@ -1485,7 +1542,7 @@ elif analysis_mode == "Group vs group":
         
         st.markdown("#### Statistical Comparison")
         comp_metrics = ["Total", st.session_state.score_sys, "Squat", "Bench", "Deadlift", "Bodyweight", "Age"]
-        sel_comp_met = st.selectbox("Select metric for comparison:", comp_metrics)
+        sel_comp_met = st.selectbox("Select metric to compare:", comp_metrics)
         
         def get_stats(df_group, col):
             if df_group.empty or col not in df_group.columns: return {}
@@ -1505,11 +1562,29 @@ elif analysis_mode == "Group vs group":
         st.dataframe(df_stats.style.format("{:.1f}"), use_container_width=True)
         
         st.markdown("---")
-        fig = px.histogram(combined, x=combined["Total"]*mult, color="Group Label", barmode="overlay", title="Total Distribution Overlay")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        fig_s = px.scatter(combined, x="Bodyweight", y=st.session_state.score_sys, color="Group Label", title=f"{st.session_state.score_sys} vs Bodyweight Overlay", hover_data=["Name", "Total"])
-        st.plotly_chart(fig_s, use_container_width=True)
+        st.subheader("Dynamic Group Comparison Chart", anchor=False)
+        chart_options = [
+            "Bodyweight", "Total", "Squat", "Bench", "Deadlift",
+            "Dots", "Wilks", "GL Points", "Age"
+        ]
+        chart_options = [c for c in chart_options if c in combined.columns]
+        x_axis, y_axis = st.columns(2)
+        with x_axis:
+            chart_x = st.selectbox("Horizontal Axis", chart_options, index=0, key="gvg_x_axis")
+        with y_axis:
+            chart_y = st.selectbox("Vertical Axis", chart_options, index=min(1, len(chart_options) - 1), key="gvg_y_axis")
+
+        chart_df = combined.dropna(subset=[chart_x, chart_y]).copy()
+        if not chart_df.empty:
+            for col in [chart_x, chart_y]:
+                if col in ["Bodyweight", "Total", "Squat", "Bench", "Deadlift"]:
+                    chart_df[col] = chart_df[col] * mult
+            fig_dynamic = px.scatter(
+                chart_df, x=chart_x, y=chart_y, color="Group Label",
+                hover_data=[c for c in ["Name", "WeightClass", "Bodyweight", "Total"] if c in chart_df.columns],
+                title=f"{chart_y} vs {chart_x}"
+            )
+            st.plotly_chart(fig_dynamic, use_container_width=True)
         
         st.markdown("---")
         st.subheader("Combined Groups Leaderboard", anchor=False)
@@ -1521,6 +1596,12 @@ elif analysis_mode == "Group vs group":
         default_cols = ["Rank", "Group Label", "Name", "Age", "WeightClass", "Bodyweight", "Total", st.session_state.score_sys, "Country", "Tested", "Equipment", "Federation"]
         sel_cols = st.multiselect("Add more columns to the table:", avail_cols, default=[c for c in default_cols if c in avail_cols], key="gvg_cols")
         
+        def color_groups(row):
+            if row["Group Label"] == name_a:
+                return ['background-color: rgba(30, 144, 255, 0.15)'] * len(row)
+            else:
+                return ['background-color: rgba(255, 99, 71, 0.15)'] * len(row)
+
         display_df = combined_sorted[sel_cols].copy()
         
         for c in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]: 
@@ -1528,12 +1609,7 @@ elif analysis_mode == "Group vs group":
         for c in ["Dots", "Wilks", "GL Points"]: 
             if c in display_df.columns: display_df[c] = display_df[c].round(2)
             
-        # Avoid row-wise Pandas styling here. It becomes noticeably expensive on
-        # large leaderboards and provides little value compared with a clean table.
-        render_dataframe(
-            display_df,
-            key_prefix="gvg_leaderboard",
-        )
+        st.dataframe(display_df.style.apply(color_groups, axis=1), use_container_width=True)
 
 elif analysis_mode == "Athlete":
     ath_df_raw = st.session_state.ath_df
@@ -1612,8 +1688,7 @@ elif analysis_mode == "Athlete":
             if "Experience" in hist_df.columns: hist_df["Experience"] = hist_df["Experience"].round(1)
 
             attempt_cols = [c for c in ["Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"] if c in hist_df.columns]
-            for ac in attempt_cols:
-                hist_df[ac] = hist_df[ac].map(format_attempt)
+            for ac in attempt_cols: hist_df[ac] = hist_df[ac].apply(format_attempt)
             
             all_possible_cols = ["MeetName", "NormMeet", "Event", "Place", "Date", "WeightClass", "Age", "Experience", "Meet#", "Bodyweight", "Total", "Dots", "Wilks", "GL Points"] + attempt_cols + ["Federation", "ParentFederation", "Equipment", "Tested"]
             avail_cols = [c for c in all_possible_cols if c in hist_df.columns]
