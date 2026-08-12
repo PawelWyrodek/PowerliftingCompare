@@ -21,11 +21,11 @@ DATA_URL = "https://github.com/PawelWyrodek/PowerliftingCompare/releases/downloa
 @st.cache_resource
 def get_duckdb_connection():
     conn = duckdb.connect()
-    # Required to read Parquet files directly over HTTPS
+    # Wymagane do czytania plików parquet bezpośrednio z HTTPS
     conn.execute("INSTALL httpfs;")
     conn.execute("LOAD httpfs;")
     
-    # Create a view over the remote Parquet file without loading it into Pandas memory
+    # Tworzymy widok bezpośrednio nad zdalnym plikiem Parquet bez ładowania do RAM-u Pandy
     conn.execute(f"""
         CREATE OR REPLACE VIEW clean_db AS
         SELECT * REPLACE (
@@ -84,13 +84,12 @@ if "app_initialized" not in st.session_state:
     if params.get("mode") == "Athlete" and "athlete" in params:
         st.session_state.ath_selected = urllib.parse.unquote(params["athlete"])
         st.session_state.submit_clicked = True
-
     if params.get("mode") == "Competition" and "meet" in params:
         st.session_state.sel_comp = urllib.parse.unquote(params["meet"])
-        st.session_state.sel_comp_year = urllib.parse.unquote(params.get("year", "All Years (Compare)"))
+        st.session_state.sel_comp_year = params.get("year", "All Years (Compare)")
         st.session_state.submit_clicked = True
-
-    
+        st.session_state.comp_query_loaded = True
+        
     st.session_state.app_initialized = True
 
 if "active_mode" not in st.session_state: 
@@ -132,11 +131,11 @@ def sort_weight_class(value):
 @st.cache_resource
 def get_duckdb_connection():
     conn = duckdb.connect()
-    # Required to read Parquet files directly over HTTPS
+    # Wymagane do czytania plików parquet bezpośrednio z HTTPS
     conn.execute("INSTALL httpfs;")
     conn.execute("LOAD httpfs;")
     
-    # Create a view over the remote Parquet file without loading it into Pandas memory
+    # Tworzymy widok bezpośrednio nad zdalnym plikiem Parquet bez ładowania do RAM-u Pandy
     conn.execute(f"""
         CREATE OR REPLACE VIEW clean_db AS
         SELECT * REPLACE (
@@ -228,7 +227,7 @@ def load_weight_class_options():
         return sorted(list(options), key=lambda x: sort_weight_class(x))
     except Exception: return []
 
-# Initialize option lists
+# Wywołania inicjalizujące bezargumentowe:
 display_countries, country_to_continent = load_countries_and_continents()
 feds_list, parent_feds_list, fed_to_parent = load_federations()
 weight_class_options = load_weight_class_options()
@@ -418,7 +417,7 @@ def run_group_analysis(cfg):
 
     if df_res.empty: return df_res
     
-    # Format the date only after df_res exists and is not empty
+    # Formatowanie daty dopiero GDY df_res istnieje i nie jest puste
     df_res['Date'] = pd.to_datetime(df_res['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     df_res["Age"] = df_res["Age"].fillna(0).astype(int)
     
@@ -454,34 +453,39 @@ def render_dataframe(df_disp, key_prefix="table", set_index=None):
 
     df_disp = df_disp.copy()
     config = {}
-
+    
     if "Name" in df_disp.columns:
         search_val = st.text_input("Search Athlete Name:", key=f"{key_prefix}_search").strip().lower()
         if search_val:
             mask = df_disp["Name"].astype(str).str.lower().str.contains(search_val, na=False)
             df_disp = df_disp[mask]
 
-        def make_url(name):
+        def make_athlete_url(name):
             n_str = str(name)
             enc_name = urllib.parse.quote(n_str)
             return f"?mode=Athlete&athlete={enc_name}#{n_str}"
 
-        df_disp["Name"] = df_disp["Name"].apply(make_url)
+        df_disp["Name"] = df_disp["Name"].apply(make_athlete_url)
         config["Name"] = st.column_config.LinkColumn("Name", display_text=r"#(.*)")
 
     if "MeetName" in df_disp.columns:
         def make_meet_url(row):
-            meet_name = str(row["MeetName"])
-            params = {"mode": "Competition", "meet": meet_name}
-            if "Date" in row.index and pd.notna(row["Date"]):
-                parsed_date = pd.to_datetime(row["Date"], errors="coerce")
-                if pd.notna(parsed_date):
-                    params["year"] = str(parsed_date.year)
-            return "?" + urllib.parse.urlencode(params)
+            meet_name = str(row.get("MeetName", ""))
+            enc_meet = urllib.parse.quote(meet_name)
+            year = ""
+            if "Date" in row.index and pd.notna(row.get("Date")):
+                try:
+                    year = str(pd.to_datetime(row.get("Date")).year)
+                except Exception:
+                    year = ""
+            query = f"?mode=Competition&meet={enc_meet}"
+            if year:
+                query += f"&year={year}"
+            return f"{query}#{meet_name}"
 
-        df_disp["MeetName"] = [make_meet_url(row) for _, row in df_disp.iterrows()]
+        df_disp["MeetName"] = df_disp.apply(make_meet_url, axis=1)
         config["MeetName"] = st.column_config.LinkColumn("MeetName", display_text=r"#(.*)")
-
+        
     if set_index and set_index in df_disp.columns:
         st.dataframe(df_disp.set_index(set_index), use_container_width=True, column_config=config)
     else:
@@ -536,7 +540,7 @@ def render_athlete_selectbox(label, key, _data):
     if search_term and len(search_term) >= 3:
         try:
             conn = get_duckdb_connection()
-            # Split the search into words so partial first or last name matches work
+            # Splituje słowa, żeby dało się znaleźć np. po samym imieniu lub wyrywkowo
             search_terms = search_term.strip().split()
             conditions = " AND ".join(["Name ILIKE ?" for _ in search_terms])
             params = [f"%{t}%" for t in search_terms]
@@ -603,12 +607,19 @@ def render_group_filters(prefix, default_label, default_sex="M", default_equip=N
     
     with col2:
         st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Date</span>", unsafe_allow_html=True)
-        date_preset = st.selectbox("Date", ["Any", "Last week", "Last month", "Last year", "Custom"], key=f"{prefix}_date_preset", label_visibility="collapsed")
+        date_preset = st.selectbox("Date", ["Any", "This week", "This month", "This year", "Custom"], key=f"{prefix}_date_preset", label_visibility="collapsed")
         today = date.today()
-        if date_preset == "Any": start_date, end_date = "1970-01-01", today.strftime("%Y-%m-%d")
-        elif date_preset == "Last week": start_date, end_date = (today - timedelta(days=7)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-        elif date_preset == "Last month": start_date, end_date = (today - timedelta(days=30)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-        elif date_preset == "Last year": start_date, end_date = (today - timedelta(days=365)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+        if date_preset == "Any":
+            start_date, end_date = "1970-01-01", today.strftime("%Y-%m-%d")
+        elif date_preset == "This week":
+            start_date = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
+        elif date_preset == "This month":
+            start_date = today.replace(day=1).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
+        elif date_preset == "This year":
+            start_date = today.replace(month=1, day=1).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
         else:
             st.markdown("<span style='font-size: 0.9em; font-weight: bold;'>Custom date range</span>", unsafe_allow_html=True)
             date_range = st.date_input("Custom date range", value=(date(1970, 1, 1), today), key=f"{prefix}_date_custom", label_visibility="collapsed")
@@ -702,129 +713,165 @@ def format_wc(val, u):
 
 def render_strength_standards(df_src, cfg, exact_bw_target=None):
     with st.expander(f"{cfg['group_name']} Strength Standards", expanded=False):
-        st.markdown("Standards are generated based on the currently filtered metric (greater than 0) inside the chosen group time range and filters.")
-        
+        st.markdown("Standards are generated from the currently filtered performance data.")
+
         target_metric = cfg["metric"] if cfg["metric"] in ["Total", "Squat", "Bench", "Deadlift"] else "Total"
         st.write(f"**Target Metric for standards**: {target_metric}")
-        
-        valid_df = df_src[df_src[target_metric] > 0].copy()
-        valid_df['WeightClass'] = valid_df['WeightClass'].astype(str).str.strip()
-        valid_df = valid_df[valid_df['WeightClass'].isin(load_weight_class_options())]
-        
-        if valid_df.empty:
+
+        quantiles = [0.1667, 0.3333, 0.5000, 0.6667, 0.8333]
+        base_valid_df = df_src[df_src[target_metric] > 0].copy()
+        if base_valid_df.empty:
             st.warning("No data available for strength standards with current filters.")
             return
 
+        # Result vs group gets exactly two rows: the submitted bodyweight and the whole group.
         if exact_bw_target is not None and exact_bw_target > 0:
-            exact_bw = exact_bw_target
+            exact_bw = float(exact_bw_target)
             exact_bw_kg = exact_bw / mult if use_lbs else exact_bw
-            st.info(f"Interpolated standards for your exact Bodyweight: {exact_bw} {unit}")
-            
-            agg_df = valid_df.groupby('WeightClass')[target_metric].quantile([0.1667, 0.3333, 0.5000, 0.6667, 0.8333]).unstack()
-            agg_df = agg_df * mult
-            
-            if agg_df.empty or len(agg_df) < 2:
-                st.warning("Not enough weight classes in filtered data to interpolate.")
-                return
 
-            # Convert weight class strings to sorted numeric floats for np.interp
-            numeric_wcs = np.array([sort_weight_class(wc) for wc in agg_df.index], dtype=float)
-            sort_idx = np.argsort(numeric_wcs)
-            
-            wcs = numeric_wcs[sort_idx]
-            
-            interp_vals = []
-            for col in agg_df.columns:
-                fp = np.asarray(agg_df[col].values, dtype=float)[sort_idx]
-                interp_vals.append(np.interp(exact_bw_kg, wcs, fp))
-            
-            exact_df = pd.DataFrame([interp_vals], columns=["Beginner", "Novice", "Intermediate", "Advanced", "Elite"], index=[f"{exact_bw} {unit}"])
-            exact_df = exact_df.round(1)
-            st.dataframe(
-                exact_df,
-                use_container_width=True,
-                column_config={
-                    "Beginner": st.column_config.NumberColumn("Beginner", help="Better than 16.6%"),
-                    "Novice": st.column_config.NumberColumn("Novice", help="Better than 33.3%"),
-                    "Intermediate": st.column_config.NumberColumn("Intermediate", help="Better than 50.0%"),
-                    "Advanced": st.column_config.NumberColumn("Advanced", help="Better than 66.6%"),
-                    "Elite": st.column_config.NumberColumn("Elite", help="Better than 83.3%"),
-                }
-            )
+            group_q = base_valid_df[target_metric].quantile(quantiles)
+            exact_pool = base_valid_df[
+                base_valid_df["Bodyweight"].notna() &
+                (base_valid_df["Bodyweight"] > 0)
+            ].copy()
+
+            exact_q = None
+            if not exact_pool.empty:
+                # Use the closest observations around the submitted bodyweight, while keeping the
+                # calculation fully within the filtered group and independent of weight classes.
+                exact_pool["BWDistance"] = (exact_pool["Bodyweight"] - exact_bw_kg).abs()
+                bandwidth = max(2.5, exact_bw_kg * 0.05)
+                local_pool = exact_pool[exact_pool["BWDistance"] <= bandwidth]
+                if len(local_pool) >= 5:
+                    exact_q = local_pool[target_metric].quantile(quantiles)
+                else:
+                    nearest_n = min(max(5, len(exact_pool)), 25)
+                    nearest = exact_pool.nsmallest(nearest_n, "BWDistance")
+                    exact_q = nearest[target_metric].quantile(quantiles) if not nearest.empty else None
+
+            rows = []
+            if exact_q is not None and len(exact_q) == 5:
+                rows.append({
+                    "Weight / Group": f"{fmt(exact_bw)} {unit}",
+                    "Beginner": exact_q.iloc[0] * mult,
+                    "Novice": exact_q.iloc[1] * mult,
+                    "Intermediate": exact_q.iloc[2] * mult,
+                    "Advanced": exact_q.iloc[3] * mult,
+                    "Elite": exact_q.iloc[4] * mult,
+                })
+            elif exact_q is None:
+                st.warning("Not enough bodyweight data to calculate standards for the submitted bodyweight.")
+
+            if len(group_q) == 5:
+                rows.append({
+                    "Weight / Group": "Entire Group",
+                    "Beginner": group_q.iloc[0] * mult,
+                    "Novice": group_q.iloc[1] * mult,
+                    "Intermediate": group_q.iloc[2] * mult,
+                    "Advanced": group_q.iloc[3] * mult,
+                    "Elite": group_q.iloc[4] * mult,
+                })
+
+            if rows:
+                result_df = pd.DataFrame(rows)
+                for c in ["Beginner", "Novice", "Intermediate", "Advanced", "Elite"]:
+                    result_df[c] = result_df[c].round(1)
+                st.dataframe(
+                    result_df,
+                    use_container_width=True,
+                    column_config={
+                        "Beginner": st.column_config.NumberColumn("Beginner", help="Better than 16.6%"),
+                        "Novice": st.column_config.NumberColumn("Novice", help="Better than 33.3%"),
+                        "Intermediate": st.column_config.NumberColumn("Intermediate", help="Better than 50.0%"),
+                        "Advanced": st.column_config.NumberColumn("Advanced", help="Better than 66.6%"),
+                        "Elite": st.column_config.NumberColumn("Elite", help="Better than 83.3%"),
+                    },
+                )
             return
 
-        col1, col2 = st.columns(2)
-        with col1:
-            divide_by_age = st.checkbox("Divide by Age (Subjunior, Junior, Open, Masters)", key=f"{cfg['group_name']}_ss_age")
+        valid_df = base_valid_df.copy()
+        valid_df["WeightClass"] = valid_df["WeightClass"].astype(str).str.strip()
+        category_df = valid_df[valid_df["WeightClass"].isin(load_weight_class_options())].copy()
+
+        divide_by_age = st.checkbox(
+            "Divide by Age (Subjunior, Junior, Open, Masters)",
+            key=f"{cfg['group_name']}_ss_age",
+        )
 
         results = []
-        quantiles = [0.1667, 0.3333, 0.5000, 0.6667, 0.8333]
-        
         all_q_vals = valid_df[target_metric].quantile(quantiles)
         if len(all_q_vals) == 5:
             base_dict = {"Weight Class": "All"}
-            if divide_by_age: base_dict["Age Group"] = "All"
+            if divide_by_age:
+                base_dict["Age Group"] = "All"
             base_dict.update({
-                "Beginner": all_q_vals.iloc[0] * mult, "Novice": all_q_vals.iloc[1] * mult,
-                "Intermediate": all_q_vals.iloc[2] * mult, "Advanced": all_q_vals.iloc[3] * mult, "Elite": all_q_vals.iloc[4] * mult,
+                "Beginner": all_q_vals.iloc[0] * mult,
+                "Novice": all_q_vals.iloc[1] * mult,
+                "Intermediate": all_q_vals.iloc[2] * mult,
+                "Advanced": all_q_vals.iloc[3] * mult,
+                "Elite": all_q_vals.iloc[4] * mult,
             })
             results.append(base_dict)
-        
-        if divide_by_age:
-            def get_age_group(age):
-                if pd.isna(age) or age == 0: return "Unknown"
-                if age <= 18: return "Subjunior"
-                elif age <= 23: return "Junior"
-                elif age <= 39: return "Open"
-                else: return "Masters"
-                
-            valid_df['Age_Bin'] = valid_df['Age'].apply(get_age_group)
-            grouped = valid_df.groupby(['WeightClass', 'Age_Bin'])
-            for (wc, age_bin), group in grouped:
-                if group.empty: continue
-                q_vals = group[target_metric].quantile(quantiles)
-                if len(q_vals) < 5: continue
-                results.append({
-                    "Weight Class": format_wc(wc, unit),
-                    "Age Group": str(age_bin),
-                    "Beginner": q_vals.iloc[0] * mult,
-                    "Novice": q_vals.iloc[1] * mult,
-                    "Intermediate": q_vals.iloc[2] * mult,
-                    "Advanced": q_vals.iloc[3] * mult,
-                    "Elite": q_vals.iloc[4] * mult,
-                })
-            
-            if not results:
-                st.warning("Not enough data to generate strength standards with the selected groupings.")
-                return
-            res_df = pd.DataFrame(results)
-            age_order = {"Subjunior": 1, "Junior": 2, "Open": 3, "Masters": 4, "Unknown": 5}
-            res_df["age_sort"] = res_df["Age Group"].map(age_order)
-            res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "").apply(lambda x: -1 if x == "All" else sort_weight_class(x))
-            res_df = res_df.sort_values(by=["wc_sort", "age_sort"]).drop(columns=["age_sort", "wc_sort"])
-        else:
-            grouped = valid_df.groupby('WeightClass')
-            for wc, group in grouped:
-                if group.empty: continue
-                q_vals = group[target_metric].quantile(quantiles)
-                if len(q_vals) < 5: continue
-                results.append({
-                    "Weight Class": format_wc(wc, unit),
-                    "Beginner": q_vals.iloc[0] * mult,
-                    "Novice": q_vals.iloc[1] * mult,
-                    "Intermediate": q_vals.iloc[2] * mult,
-                    "Advanced": q_vals.iloc[3] * mult,
-                    "Elite": q_vals.iloc[4] * mult,
-                })
-                
-            if not results:
-                st.warning("Not enough data to generate strength standards for this group.")
-                return
-            res_df = pd.DataFrame(results)
-            res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "").apply(lambda x: -1 if x == "All" else sort_weight_class(x))
-            res_df = res_df.sort_values(by="wc_sort").drop(columns=["wc_sort"])
 
-        for c in ["Beginner", "Novice", "Intermediate", "Advanced", "Elite"]: res_df[c] = res_df[c].round(1)
+        if not category_df.empty:
+            if divide_by_age:
+                def get_age_group(age):
+                    if pd.isna(age) or age == 0:
+                        return "Unknown"
+                    if age <= 18:
+                        return "Subjunior"
+                    if age <= 23:
+                        return "Junior"
+                    if age <= 39:
+                        return "Open"
+                    return "Masters"
+
+                category_df["Age_Bin"] = category_df["Age"].apply(get_age_group)
+                grouped = category_df.groupby(["WeightClass", "Age_Bin"])
+                for (wc, age_bin), group in grouped:
+                    q_vals = group[target_metric].quantile(quantiles)
+                    if len(q_vals) < 5:
+                        continue
+                    results.append({
+                        "Weight Class": format_wc(wc, unit),
+                        "Age Group": str(age_bin),
+                        "Beginner": q_vals.iloc[0] * mult,
+                        "Novice": q_vals.iloc[1] * mult,
+                        "Intermediate": q_vals.iloc[2] * mult,
+                        "Advanced": q_vals.iloc[3] * mult,
+                        "Elite": q_vals.iloc[4] * mult,
+                    })
+            else:
+                grouped = category_df.groupby("WeightClass")
+                for wc, group in grouped:
+                    q_vals = group[target_metric].quantile(quantiles)
+                    if len(q_vals) < 5:
+                        continue
+                    results.append({
+                        "Weight Class": format_wc(wc, unit),
+                        "Beginner": q_vals.iloc[0] * mult,
+                        "Novice": q_vals.iloc[1] * mult,
+                        "Intermediate": q_vals.iloc[2] * mult,
+                        "Advanced": q_vals.iloc[3] * mult,
+                        "Elite": q_vals.iloc[4] * mult,
+                    })
+
+        if not results:
+            st.warning("Not enough data to generate strength standards for this group.")
+            return
+
+        res_df = pd.DataFrame(results)
+        for c in ["Beginner", "Novice", "Intermediate", "Advanced", "Elite"]:
+            res_df[c] = res_df[c].round(1)
+        if "Age Group" in res_df.columns:
+            age_order = {"All": 0, "Subjunior": 1, "Junior": 2, "Open": 3, "Masters": 4, "Unknown": 5}
+            res_df["age_sort"] = res_df["Age Group"].map(age_order).fillna(99)
+        else:
+            res_df["age_sort"] = 0
+        res_df["wc_sort"] = res_df["Weight Class"].str.replace(f" {unit}", "", regex=False).apply(
+            lambda x: -1 if x == "All" else sort_weight_class(x)
+        )
+        res_df = res_df.sort_values(["wc_sort", "age_sort"]).drop(columns=["wc_sort", "age_sort"])
 
         st.dataframe(
             res_df,
@@ -835,137 +882,179 @@ def render_strength_standards(df_src, cfg, exact_bw_target=None):
                 "Intermediate": st.column_config.NumberColumn("Intermediate", help="Better than 50.0%"),
                 "Advanced": st.column_config.NumberColumn("Advanced", help="Better than 66.6%"),
                 "Elite": st.column_config.NumberColumn("Elite", help="Better than 83.3%"),
-            }
+            },
         )
+
 
 def render_competition_section(df_src, cfg):
     comp_tabs = st.tabs(["Athletes Chart", "Category Difficulty", "Results Table"])
-    
+
     with comp_tabs[0]:
-        st.write("Compare categories or athletes based on performance.")
-        
-        valid_wcs = sorted([w for w in df_src['WeightClass'].dropna().astype(str).unique() if w in load_weight_class_options()], key=sort_weight_class)
-        sel_comp_wcs = st.multiselect(
-            "Select Weight Classes for Chart",
-            valid_wcs,
-            default=valid_wcs,
-            key=f"{cfg['group_name']}_comp_wc"
+        st.write("Compare all athletes or selected weight classes based on performance.")
+
+        comp_metric = st.selectbox(
+            "Select Metric",
+            ["Total", "Dots", "Wilks", "GL Points"],
+            key=f"{cfg['group_name']}_comp_metric",
+        )
+        selection_mode = st.radio(
+            "Athlete Selection",
+            ["All Athletes", "Weight Classes"],
+            horizontal=True,
+            key=f"{cfg['group_name']}_comp_selection_mode",
         )
 
-        chart_axis_options = [
-            "Bodyweight", "Total", "Dots", "Wilks", "GL Points",
-            "Squat", "Bench", "Deadlift", "Age", "Place"
-        ]
-        ax1, ax2 = st.columns(2)
-        with ax1:
-            comp_x = st.selectbox(
-                "Horizontal Axis",
-                chart_axis_options,
-                index=chart_axis_options.index("Bodyweight"),
-                key=f"{cfg['group_name']}_comp_x"
+        if selection_mode == "Weight Classes":
+            valid_wcs = sorted(
+                df_src["WeightClass"].dropna().astype(str).unique().tolist(),
+                key=sort_weight_class,
             )
-        with ax2:
-            comp_y = st.selectbox(
-                "Vertical Axis",
-                chart_axis_options,
-                index=chart_axis_options.index("Total"),
-                key=f"{cfg['group_name']}_comp_y"
+            sel_comp_wcs = st.multiselect(
+                "Select Weight Classes for Chart",
+                valid_wcs,
+                default=valid_wcs,
+                key=f"{cfg['group_name']}_comp_wc",
             )
+            c_df = df_src[df_src["WeightClass"].astype(str).isin(sel_comp_wcs)].copy()
+            color_col = "WeightClass" if not c_df.empty else None
+        else:
+            c_df = df_src.copy()
+            color_col = "Sex" if "Sex" in c_df.columns else None
 
-        c_df = df_src[df_src["WeightClass"].astype(str).isin(sel_comp_wcs)].copy()
-        if comp_x in c_df.columns and comp_y in c_df.columns:
-            c_df = c_df.dropna(subset=[comp_x, comp_y])
+        axis_options = ["Bodyweight", "Total", "Dots", "Wilks", "GL Points", "Squat", "Bench", "Deadlift", "Age", "Place"]
+        x_axis = st.selectbox("Horizontal Axis", axis_options, index=axis_options.index("Bodyweight"), key=f"{cfg['group_name']}_comp_x")
+        y_axis = st.selectbox("Vertical Axis", axis_options, index=axis_options.index(comp_metric), key=f"{cfg['group_name']}_comp_y")
 
-        if not c_df.empty:
-            plot_df = c_df.copy()
-            weight_cols = {"Bodyweight", "Total", "Squat", "Bench", "Deadlift"}
-            if comp_x in weight_cols:
-                plot_df[comp_x] = plot_df[comp_x] * mult
-            if comp_y in weight_cols:
-                plot_df[comp_y] = plot_df[comp_y] * mult
-
+        plot_df = c_df.dropna(subset=[x_axis, y_axis]).copy() if not c_df.empty else c_df
+        if not plot_df.empty:
+            # Apply unit conversion only to kilogram-based variables.
+            x_plot = plot_df[x_axis] * mult if x_axis in ["Bodyweight", "Total", "Squat", "Bench", "Deadlift"] else plot_df[x_axis]
+            y_plot = plot_df[y_axis] * mult if y_axis in ["Bodyweight", "Total", "Squat", "Bench", "Deadlift"] else plot_df[y_axis]
+            plot_df = plot_df.copy()
+            plot_df["_x"] = x_plot
+            plot_df["_y"] = y_plot
             fig = px.scatter(
                 plot_df,
-                x=comp_x,
-                y=comp_y,
-                color="WeightClass",
-                hover_data=["Name", "Total", "Squat", "Bench", "Deadlift"],
-                title=f"{comp_y} vs {comp_x} Distribution by Selected Categories"
+                x="_x",
+                y="_y",
+                color=color_col,
+                hover_data=[c for c in ["Name", "WeightClass", "Sex", "Total", "Squat", "Bench", "Deadlift"] if c in plot_df.columns],
+                title=f"{y_axis} vs {x_axis}",
             )
+            fig.update_xaxes(title=f"{x_axis} ({unit})" if x_axis in ["Bodyweight", "Total", "Squat", "Bench", "Deadlift"] else x_axis)
+            fig.update_yaxes(title=f"{y_axis} ({unit})" if y_axis in ["Bodyweight", "Total", "Squat", "Bench", "Deadlift"] else y_axis)
             st.plotly_chart(fig, use_container_width=True)
-            
+        elif selection_mode == "Weight Classes":
+            st.info("No athletes match the selected weight classes. Choose All Athletes to include every athlete in the competition.")
+        else:
+            st.info("No athletes available for the selected axes.")
+
     with comp_tabs[1]:
         st.write("Weight categories ranked by difficulty based on group performance.")
         diff_metric = st.selectbox("Points System", ["Dots", "Wilks", "GL Points"], key=f"{cfg['group_name']}_diff_met")
         agg_type = st.selectbox("Comparison Method", ["Average", "Median", "Placement (Top N)", "All Points (Scatter)"], key=f"{cfg['group_name']}_agg_type")
-        
+
         place_n = 1
         if agg_type == "Placement (Top N)":
             place_n = st.selectbox("Select Placement", [1, 2, 3, 4, 5, 6, 7, 8], key=f"{cfg['group_name']}_place_n")
-        diff_df = df_src.dropna(subset=['WeightClass', diff_metric]).copy()
-        diff_df['WeightClass'] = diff_df['WeightClass'].astype(str)
-        diff_df = diff_df[diff_df['WeightClass'].isin(load_weight_class_options())]
-        
+        diff_df = df_src.dropna(subset=[diff_metric]).copy()
+        if "WeightClass" in diff_df.columns:
+            diff_df["WeightClass"] = diff_df["WeightClass"].fillna("Unspecified").astype(str)
+        else:
+            diff_df["WeightClass"] = "Unspecified"
+
         if agg_type in ["Average", "Median", "Placement (Top N)"]:
-            group_cols = ['WeightClass', 'Sex'] if 'Sex' in diff_df.columns else ['WeightClass']
-            if agg_type == "Average": agg_diff = diff_df.groupby(group_cols)[diff_metric].mean().reset_index()
-            elif agg_type == "Median": agg_diff = diff_df.groupby(group_cols)[diff_metric].median().reset_index()
+            group_cols = ["WeightClass", "Sex"] if "Sex" in diff_df.columns else ["WeightClass"]
+            if agg_type == "Average":
+                agg_diff = diff_df.groupby(group_cols)[diff_metric].mean().reset_index()
+            elif agg_type == "Median":
+                agg_diff = diff_df.groupby(group_cols)[diff_metric].median().reset_index()
             else:
                 def get_nth(series, n):
                     sorted_vals = series.nlargest(n)
                     return sorted_vals.min() if len(sorted_vals) >= n else np.nan
-                agg_diff = diff_df.groupby(group_cols)[diff_metric].apply(lambda x: get_nth(x, place_n)).reset_index()
+                agg_diff = diff_df.groupby(group_cols)[diff_metric].apply(lambda x: get_nth(x, place_n)).reset_index(name=diff_metric)
 
-            agg_diff['SortKey'] = agg_diff['WeightClass'].apply(sort_weight_class)
-            agg_diff = agg_diff.sort_values('SortKey').drop(columns=['SortKey'])
-            
-            color_col = 'Sex' if 'Sex' in agg_diff.columns else None
+            agg_diff["SortKey"] = agg_diff["WeightClass"].apply(sort_weight_class)
+            agg_diff = agg_diff.sort_values("SortKey").drop(columns=["SortKey"])
+
+            color_col = "Sex" if "Sex" in agg_diff.columns else None
             fig_diff = px.bar(
-                agg_diff, x="WeightClass", y=diff_metric, color=color_col, barmode="group",
-                title=f"Difficulty Level per Category - {agg_type} ({diff_metric})"
+                agg_diff,
+                x="WeightClass",
+                y=diff_metric,
+                color=color_col,
+                barmode="group",
+                title=f"Difficulty Level per Category - {agg_type} ({diff_metric})",
             )
+
+            if "Sex" in diff_df.columns:
+                sex_means = diff_df.groupby("Sex")[diff_metric].mean().dropna()
+                for sex_label, mean_value in sex_means.items():
+                    fig_diff.add_hline(
+                        y=float(mean_value),
+                        line_dash="dash",
+                        annotation_text=f"{sex_label} average: {mean_value:.2f}",
+                        annotation_position="top right",
+                    )
         else:
-            diff_df['SortKey'] = diff_df['WeightClass'].apply(sort_weight_class)
-            diff_df = diff_df.sort_values('SortKey')
-            color_col = 'Sex' if 'Sex' in diff_df.columns else 'WeightClass'
+            diff_df["SortKey"] = diff_df["WeightClass"].apply(sort_weight_class)
+            diff_df = diff_df.sort_values("SortKey")
+            color_col = "Sex" if "Sex" in diff_df.columns else "WeightClass"
             fig_diff = px.scatter(
-                diff_df, x="WeightClass", y=diff_metric, color=color_col, hover_data=["Name", "Place", "Total"],
-                title=f"Difficulty Level per Category - All Points ({diff_metric})"
+                diff_df,
+                x="WeightClass",
+                y=diff_metric,
+                color=color_col,
+                hover_data=[c for c in ["Name", "Place", "Total", "Sex"] if c in diff_df.columns],
+                title=f"Difficulty Level per Category - All Points ({diff_metric})",
             )
-            
+            if "Sex" in diff_df.columns:
+                sex_means = diff_df.groupby("Sex")[diff_metric].mean().dropna()
+                for sex_label, mean_value in sex_means.items():
+                    fig_diff.add_hline(
+                        y=float(mean_value),
+                        line_dash="dash",
+                        annotation_text=f"{sex_label} average: {mean_value:.2f}",
+                        annotation_position="top right",
+                    )
+
         st.plotly_chart(fig_diff, use_container_width=True)
 
     with comp_tabs[2]:
-        st.write("Dynamically display weight category results.")
-        t_wcs = sorted(df_src['WeightClass'].dropna().astype(str).unique(), key=sort_weight_class)
-        sel_t_wcs = st.multiselect("Select Categories to Display in Table", t_wcs, default=t_wcs, key=f"{cfg['group_name']}_t_wcs")
-        
-        t_df = df_src[df_src['WeightClass'].astype(str).isin(sel_t_wcs)].copy()
-        
+        st.write("Dynamically display competition results.")
+        t_wcs = sorted(df_src["WeightClass"].dropna().astype(str).unique().tolist(), key=sort_weight_class) if "WeightClass" in df_src.columns else []
+        t_scope = st.radio("Table Scope", ["All Athletes", "Selected Weight Classes"], horizontal=True, key=f"{cfg['group_name']}_t_scope")
+        if t_scope == "Selected Weight Classes":
+            sel_t_wcs = st.multiselect("Select Categories to Display in Table", t_wcs, default=t_wcs, key=f"{cfg['group_name']}_t_wcs")
+            t_df = df_src[df_src["WeightClass"].astype(str).isin(sel_t_wcs)].copy()
+        else:
+            t_df = df_src.copy()
+
         default_cols = ["Place", "Name", "Age", "WeightClass", "Total", "Dots", "Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"]
-        available_cols = ["Place", "Name", "Age", "AgeCategory", "WeightClass", "Bodyweight", "Total", "Dots", "Wilks", "GL Points", 
-                            "Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", 
-                            "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg", "Date"]
-        
-        sel_cols = st.multiselect("Columns", available_cols, default=default_cols, key=f"{cfg['group_name']}_t_cols")
-        
+        available_cols = [c for c in ["Place", "Name", "Age", "AgeCategory", "WeightClass", "Bodyweight", "Total", "Dots", "Wilks", "GL Points", "Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg", "Date", "MeetName", "Federation"] if c in t_df.columns]
+
+        sel_cols = st.multiselect("Columns", available_cols, default=[c for c in default_cols if c in available_cols], key=f"{cfg['group_name']}_t_cols")
         group_by_age = st.checkbox("Group by Age Category", key=f"{cfg['group_name']}_t_group_age")
-        
+
         display_t_df = t_df.copy()
-        if "Date" in display_t_df.columns: display_t_df["Date"] = pd.to_datetime(display_t_df["Date"], errors='coerce').dt.strftime("%Y-%m-%d")
+        if "Date" in display_t_df.columns:
+            display_t_df["Date"] = pd.to_datetime(display_t_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
         for c in ["Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"]:
-            if c in display_t_df.columns: 
-                display_t_df[c] = pd.to_numeric(display_t_df[c], errors='coerce') * mult
+            if c in display_t_df.columns:
+                display_t_df[c] = pd.to_numeric(display_t_df[c], errors="coerce") * mult
                 display_t_df[c] = display_t_df[c].apply(format_attempt)
                 if use_lbs:
                     new_c = c.replace("Kg", "Lbs")
                     display_t_df.rename(columns={c: new_c}, inplace=True)
-                    sel_cols = [new_c if x==c else x for x in sel_cols]
+                    sel_cols = [new_c if x == c else x for x in sel_cols]
         for c in ["Total", "Bodyweight"]:
-            if c in display_t_df.columns: display_t_df[c] = (display_t_df[c] * mult).round(1)
+            if c in display_t_df.columns:
+                display_t_df[c] = (display_t_df[c] * mult).round(1)
         for c in ["Dots", "Wilks", "GL Points"]:
-            if c in display_t_df.columns: display_t_df[c] = display_t_df[c].round(2)
-            
+            if c in display_t_df.columns:
+                display_t_df[c] = display_t_df[c].round(2)
+
         if group_by_age and "AgeCategory" in display_t_df.columns:
             for age_cat in display_t_df["AgeCategory"].dropna().unique():
                 st.markdown(f"#### {age_cat}")
@@ -975,6 +1064,7 @@ def render_competition_section(df_src, cfg):
         else:
             display_cols = [c for c in sel_cols if c in display_t_df.columns]
             render_dataframe(display_t_df[display_cols], key_prefix=f"{cfg['group_name']}_t")
+
 
 def render_group_tab(df_src, cfg, exact_bw_target=None, user_data=None):
     if df_src is None or df_src.empty:
@@ -1065,7 +1155,7 @@ def render_group_tab(df_src, cfg, exact_bw_target=None, user_data=None):
             u_y = user_data[y_ax] if y_ax in ["Dots", "Wilks", "GL Points", "Age", "Experience", "Meet#"] else user_data[y_ax] * mult
             fig_custom.add_trace(go.Scatter(
                 x=[u_x], y=[u_y], mode='markers', marker=dict(color='red', size=16, symbol='star', line=dict(color='black', width=2)),
-                name=user_data.get('Name', 'Target/PR')
+                name=user_data.get('Name', 'Cel/PR')
             )
         )
         st.plotly_chart(fig_custom, use_container_width=True)
@@ -1086,7 +1176,7 @@ def render_group_tab(df_src, cfg, exact_bw_target=None, user_data=None):
     default_table_cols = [c for c in ["Rank", "Name", "Age", "Bodyweight", "Date", "MeetName", "Squat", "Bench", "Deadlift", "Total", sys_col, "Place"] if c in all_table_cols]
     
     selected_leaderboard_cols = st.multiselect("Customize columns:", all_table_cols, default=default_table_cols, key=f"{cfg['group_name']}_l_cols")
-    display_cols = selected_leaderboard_cols # Keep the selected columns unchanged
+    display_cols = selected_leaderboard_cols # Nie ma już ryzyka usunięcia kolumny
     
     df_display = df_table.copy()
     df_display.insert(0, "Rank", range(1, len(df_display) + 1))
@@ -1128,18 +1218,12 @@ def apply_athlete_filters(df_src, key_prefix):
 
     st.markdown("#### Filter Athlete Career")
     cols = st.columns(4)
-    filter_keys = ["Event", "WeightClass", "Equipment", "Tested", "Federation"]
+    filter_keys = ["WeightClass", "Equipment", "Tested", "Federation"]
     
     for i, col in enumerate(filter_keys):
         unique_vals = filtered[col].dropna().unique().tolist()
         if len(unique_vals) > 1:
-            label = "Event Type" if col == "Event" else col
-            sel = cols[i % 4].multiselect(
-                label,
-                unique_vals,
-                default=unique_vals,
-                key=f"{key_prefix}_filt_{col}"
-            )
+            sel = cols[i%4].multiselect(col, unique_vals, default=unique_vals, key=f"{key_prefix}_filt_{col}")
             filtered = filtered[filtered[col].isin(sel)]
     return filtered
 
@@ -1231,78 +1315,46 @@ elif analysis_mode == "Athlete vs athlete":
 
 elif analysis_mode == "Competition":
     st.markdown("## Competition")
-
-    comp_fed = st.multiselect(
-        "Search by Federation",
-        feds_list,
-        key="comp_federation_search"
-    )
-    comp_search = st.text_input(
-        "Search Competition Name (optional, at least 3 characters):",
-        key="comp_search_val"
-    ).strip()
-
     conn = get_duckdb_connection()
+    comp_search = st.text_input("Search Competition Name (Type at least 3 characters):", key="comp_search_val")
+    fed_filter = st.selectbox("Filter by Federation", ["All Federations"] + feds_list, key="comp_fed_filter")
+
     conditions = []
     params = []
-
     if comp_search:
         if len(comp_search) < 3:
-            st.info("Enter at least 3 characters for a competition name search, or select a federation.")
+            st.info("Enter at least 3 characters for competition name search, or leave it empty to search by federation.")
         else:
             conditions.append("MeetName ILIKE ?")
             params.append(f"%{comp_search}%")
-
-    if comp_fed:
-        placeholders = ",".join(["?"] * len(comp_fed))
-        conditions.append(f"Federation IN ({placeholders})")
-        params.extend(comp_fed)
+    if fed_filter != "All Federations":
+        conditions.append("Federation = ?")
+        params.append(fed_filter)
 
     if conditions:
         comps_df = conn.execute(
-            f"SELECT DISTINCT MeetName FROM clean_db WHERE {' AND '.join(conditions)} AND MeetName IS NOT NULL ORDER BY MeetName",
-            params
+            "SELECT DISTINCT MeetName FROM clean_db WHERE " + " AND ".join(conditions) + " ORDER BY MeetName",
+            params,
         ).df()
-    else:
-        comps_df = pd.DataFrame(columns=["MeetName"])
-
-    if not comps_df.empty:
-        comp_list = comps_df["MeetName"].dropna().astype(str).tolist()
-        saved_comp = st.session_state.get("sel_comp")
-        default_comp_index = comp_list.index(saved_comp) if saved_comp in comp_list else 0
-
-        sel_comp = st.selectbox(
-            "Select Competition:",
-            comp_list,
-            index=default_comp_index,
-            key="sel_comp_ui"
-        )
-
-        years_df = conn.execute(
-            "SELECT DISTINCT extract(year from Date) as Year FROM clean_db WHERE MeetName = ? ORDER BY Year DESC",
-            [sel_comp]
-        ).df()
-        years = years_df["Year"].dropna().astype(int).astype(str).tolist()
-
-        saved_year = st.session_state.get("sel_comp_year")
-        year_options = ["All Years (Compare)"] + years
-        default_year_index = year_options.index(saved_year) if saved_year in year_options else 0
-
-        year_opt = st.selectbox(
-            "Select Year:",
-            year_options,
-            index=default_year_index,
-            key="sel_comp_year_ui"
-        )
-
-        if st.button("Load Competition Data", use_container_width=True):
-            st.session_state.submit_clicked = True
-            st.session_state.sel_comp = sel_comp
-            st.session_state.sel_comp_year = year_opt
-    elif conditions:
-        st.warning("No competitions found matching the selected filters.")
-    else:
-        st.info("Select a federation or enter a competition name to find competitions.")
+        if comps_df is not None and not comps_df.empty:
+            comp_list = sorted(comps_df["MeetName"].dropna().unique().tolist())
+            selected_default = st.session_state.get("sel_comp") if st.session_state.get("sel_comp") in comp_list else comp_list[0]
+            sel_comp = st.selectbox("Select Competition:", comp_list, index=comp_list.index(selected_default), key="sel_comp_ui")
+            years_df = conn.execute("SELECT DISTINCT extract(year from Date) as Year FROM clean_db WHERE MeetName = ? ORDER BY Year DESC", [sel_comp]).df()
+            years = years_df["Year"].dropna().astype(int).astype(str).tolist()
+            default_year = st.session_state.get("sel_comp_year", "All Years (Compare)")
+            year_options = ["All Years (Compare)"] + years
+            if default_year not in year_options:
+                default_year = "All Years (Compare)"
+            year_opt = st.selectbox("Select Year:", year_options, index=year_options.index(default_year), key="sel_comp_year_ui")
+            if st.button("Load Competition Data", use_container_width=True):
+                st.session_state.submit_clicked = True
+                st.session_state.sel_comp = sel_comp
+                st.session_state.sel_comp_year = year_opt
+        else:
+            st.warning("No competitions found matching the selected filters.")
+    elif not comp_search and fed_filter == "All Federations":
+        st.info("Select a federation or enter a competition name to search.")
 
 elif analysis_mode == "Calculators":
     st.session_state.submit_clicked = False
@@ -1312,7 +1364,8 @@ elif analysis_mode == "Calculators":
     calc_mode = st.radio("Select Mode", ["Standard Calculator", "Reverse Calculator"], horizontal=True)
     st.markdown("---")
 
-    # Scoring helper functions
+    # Funkcje pomocnicze do punktacji
+    # Funkcje pomocnicze do punktacji
     def calc_points(bw, tot, sex, system):
         if bw <= 0 or tot <= 0: return 0.0
         if system == "Dots":
@@ -1351,53 +1404,31 @@ elif analysis_mode == "Calculators":
         st.markdown("Calculate required lifts based on a target Total or Points goal.")
         
         c1, c2, c3 = st.columns(3)
-        def clear_reverse_target():
-            st.session_state["reverse_target_value"] = None
-
         with c1:
-            target_metric = st.selectbox(
-                "Calculate for",
-                ["Total", "Dots", "Wilks", "GL Points"],
-                key="reverse_target_metric",
-                on_change=clear_reverse_target
-            )
+            target_metric = st.selectbox("Calculate for", ["Total", "Dots", "Wilks", "GL Points"])
         with c2:
-            target_val = st.number_input(
-                "Target Value",
-                min_value=1.0,
-                value=None,
-                step=2.5,
-                key="reverse_target_value"
-            )
+            target_val = st.number_input("Target Value", min_value=1.0, value=650.0, step=2.5)
         with c3:
             bw_rc = st.number_input("Bodyweight", min_value=30.0, max_value=300.0, value=72.0, step=0.5)
-            sex_rc = st.selectbox("Sex", ["M", "F"])
+            sex_rc = st.selectbox("Sex ", ["M", "F"])
 
+        # Odtworzona logika przeliczająca wybrane punkty na wymagany Total (req_total)
         req_total = 0.0
-        if target_val is not None:
-            if target_metric == "Total":
-                req_total = target_val
-            elif target_metric == "Dots":
-                if sex_rc == "M":
-                    denom = -0.000001093 * (bw_rc ** 4) + 0.0007391293 * (bw_rc ** 3) - 0.1918759221 * (bw_rc ** 2) + 24.0900756 * bw_rc - 307.75076
-                else:
-                    denom = -0.000010706 * (bw_rc ** 4) + 0.005158568 * (bw_rc ** 3) - 0.92501065 * (bw_rc ** 2) + 75.323049 * bw_rc - 516.39869
-                if denom != 0:
-                    req_total = target_val * denom / 500.0
+        if target_metric == "Total":
+            req_total = target_val
+        else:
+            if target_metric == "Dots":
+                if sex_rc == "M": denom = -0.000001093 * (bw_rc ** 4) + 0.0007391293 * (bw_rc ** 3) -0.1918759221 * (bw_rc ** 2) + 24.0900756 * bw_rc - 307.75076
+                else: denom = -0.000010706 * (bw_rc ** 4) + 0.005158568 * (bw_rc ** 3) -0.92501065 * (bw_rc ** 2) + 75.323049 * bw_rc - 516.39869
+                if denom != 0: req_total = target_val * denom / 500.0
             elif target_metric == "Wilks":
-                if sex_rc == "M":
-                    denom = -216.0475144 + 16.2606339 * bw_rc - 0.002388645 * (bw_rc ** 2) - 0.00113732 * (bw_rc ** 3) + 7.01863E-06 * (bw_rc ** 4) - 1.291E-08 * (bw_rc ** 5)
-                else:
-                    denom = 594.3174777 - 27.23842536 * bw_rc + 0.821122268 * (bw_rc ** 2) - 0.009307339 * (bw_rc ** 3) + 4.73158E-05 * (bw_rc ** 4) - 9.054E-08 * (bw_rc ** 5)
-                if denom != 0:
-                    req_total = target_val * denom / 500.0
+                if sex_rc == "M": denom = -216.0475144 + 16.2606339*bw_rc -0.002388645*(bw_rc**2) -0.00113732*(bw_rc**3) + 7.01863E-06*(bw_rc**4) -1.291E-08*(bw_rc**5)
+                else: denom = 594.3174777 -27.23842536*bw_rc + 0.821122268*(bw_rc**2) -0.009307339*(bw_rc**3) + 4.73158E-05*(bw_rc**4) -9.054E-08*(bw_rc**5)
+                if denom != 0: req_total = target_val * denom / 500.0
             elif target_metric == "GL Points":
-                if sex_rc == "M":
-                    denom = 1199.72839 - 925.40462 * np.exp(-0.00510531 * bw_rc)
-                else:
-                    denom = 610.79046 - 451.04414 * np.exp(-0.00735665 * bw_rc)
-                if denom != 0:
-                    req_total = target_val * denom / 100.0
+                if sex_rc == "M": denom = 1199.72839 - 925.40462 * np.exp(-0.00510531 * bw_rc)
+                else: denom = 610.79046 - 451.04414 * np.exp(-0.00735665 * bw_rc)
+                if denom != 0: req_total = target_val * denom / 100.0
 
         st.markdown("#### Lift Proportions (%)")
         st.caption("Write lift proportions as percentages of the total. They should sum to 100%.")
@@ -1552,7 +1583,7 @@ if analysis_mode in ["Group", "Result vs group"] and not st.session_state.df_a.e
             
         st.markdown("---")
         u_score_val = u_score if 'u_score' in locals() else 0.0
-        user_data = {"Name": "Your Target", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
+        user_data = {"Name": "Twój Cel", "Total": u_tot_kg, "Squat": u_squat_kg, "Bench": u_bench_kg, "Deadlift": u_deadlift_kg, "Bodyweight": u_bw_kg, sys_metric: u_score_val}
         if not df_a.empty: render_group_tab(df_a, cfg_a_mem, exact_bw_target=u_bw, user_data=user_data)
         
     elif analysis_mode == "Group":
@@ -1607,7 +1638,7 @@ elif analysis_mode == "Group vs group":
         
         st.markdown("#### Statistical Comparison")
         comp_metrics = ["Total", st.session_state.score_sys, "Squat", "Bench", "Deadlift", "Bodyweight", "Age"]
-        sel_comp_met = st.selectbox("Select metric to compare:", comp_metrics)
+        sel_comp_met = st.selectbox("Wybierz metrykę do porównania:", comp_metrics)
         
         def get_stats(df_group, col):
             if df_group.empty or col not in df_group.columns: return {}
@@ -1630,8 +1661,29 @@ elif analysis_mode == "Group vs group":
         fig = px.histogram(combined, x=combined["Total"]*mult, color="Group Label", barmode="overlay", title="Total Distribution Overlay")
         st.plotly_chart(fig, use_container_width=True)
         
-        fig_s = px.scatter(combined, x="Bodyweight", y=st.session_state.score_sys, color="Group Label", title=f"{st.session_state.score_sys} vs Bodyweight Overlay", hover_data=["Name", "Total"])
-        st.plotly_chart(fig_s, use_container_width=True)
+        st.markdown("#### Dynamic Group Overlay")
+        overlay_opts = ["Total", "Dots", "Wilks", "GL Points", "Bodyweight", "Squat", "Bench", "Deadlift", "Age", "Meet#", "Experience"]
+        ov_c1, ov_c2 = st.columns(2)
+        with ov_c1:
+            overlay_x = st.selectbox("Horizontal Axis", overlay_opts, index=overlay_opts.index("Bodyweight"), key="gvg_overlay_x")
+        with ov_c2:
+            overlay_y = st.selectbox("Vertical Axis", overlay_opts, index=overlay_opts.index(st.session_state.score_sys), key="gvg_overlay_y")
+
+        overlay_df = combined.dropna(subset=[overlay_x, overlay_y]).copy()
+        if not overlay_df.empty:
+            overlay_df["_x"] = overlay_df[overlay_x] * mult if overlay_x in ["Total", "Squat", "Bench", "Deadlift", "Bodyweight"] else overlay_df[overlay_x]
+            overlay_df["_y"] = overlay_df[overlay_y] * mult if overlay_y in ["Total", "Squat", "Bench", "Deadlift", "Bodyweight"] else overlay_df[overlay_y]
+            fig_s = px.scatter(
+                overlay_df,
+                x="_x",
+                y="_y",
+                color="Group Label",
+                title=f"{overlay_y} vs {overlay_x} Overlay",
+                hover_data=[c for c in ["Name", "Total", "Bodyweight", "Group Label"] if c in overlay_df.columns],
+            )
+            fig_s.update_xaxes(title=f"{overlay_x} ({unit})" if overlay_x in ["Total", "Squat", "Bench", "Deadlift", "Bodyweight"] else overlay_x)
+            fig_s.update_yaxes(title=f"{overlay_y} ({unit})" if overlay_y in ["Total", "Squat", "Bench", "Deadlift", "Bodyweight"] else overlay_y)
+            st.plotly_chart(fig_s, use_container_width=True)
         
         st.markdown("---")
         st.subheader("Combined Groups Leaderboard", anchor=False)
@@ -1641,7 +1693,7 @@ elif analysis_mode == "Group vs group":
         
         avail_cols = list(combined_sorted.columns)
         default_cols = ["Rank", "Group Label", "Name", "Age", "WeightClass", "Bodyweight", "Total", st.session_state.score_sys, "Country", "Tested", "Equipment", "Federation"]
-        sel_cols = st.multiselect("Add more data to the table:", avail_cols, default=[c for c in default_cols if c in avail_cols], key="gvg_cols")
+        sel_cols = st.multiselect("Dodaj więcej danych do tabeli:", avail_cols, default=[c for c in default_cols if c in avail_cols], key="gvg_cols")
         
         def color_groups(row):
             if row["Group Label"] == name_a:
@@ -1651,17 +1703,11 @@ elif analysis_mode == "Group vs group":
 
         display_df = combined_sorted[sel_cols].copy()
         
-        for c in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]:
-            if c in display_df.columns:
-                display_df[c] = display_df[c].apply(
-                    lambda value: fmt(value * mult) if pd.notna(value) else ""
-                )
-        for c in ["Dots", "Wilks", "GL Points"]:
-            if c in display_df.columns:
-                display_df[c] = display_df[c].apply(
-                    lambda value: f"{float(value):.2f}" if pd.notna(value) else ""
-                )
-
+        for c in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]: 
+            if c in display_df.columns: display_df[c] = (display_df[c] * mult).round(1)
+        for c in ["Dots", "Wilks", "GL Points"]: 
+            if c in display_df.columns: display_df[c] = display_df[c].round(2)
+            
         st.dataframe(display_df.style.apply(color_groups, axis=1), use_container_width=True)
 
 elif analysis_mode == "Athlete":
@@ -1681,19 +1727,15 @@ elif analysis_mode == "Athlete":
         est_by = ath_df['EstBirthYear'].median()
         est_by_str = f"{int(est_by)}" if pd.notna(est_by) else "Unknown"
 
-        country_values = ath_df["Country"].dropna().astype(str).str.strip()
-        country = next((value for value in country_values if value), "Unknown")
-
-        m1, m2, m3, m4, m5, m6, m7, m8, m9 = st.columns(9)
-        m1.metric("Country", country)
-        m2.metric("Est. Birth Year", est_by_str)
-        m3.metric("Meets Total", len(ath_df))
-        m4.metric("Career (Years)", f"{longevity_yrs:.1f}")
-        m5.metric("PR Squat", f"{pr_squat * mult:.1f}")
-        m6.metric("PR Bench", f"{pr_bench * mult:.1f}")
-        m7.metric("PR Deadlift", f"{pr_deadlift * mult:.1f}")
-        m8.metric("PR Total", f"{pr_total * mult:.1f}")
-        m9.metric("PR DOTS", f"{pr_dots:.1f}")
+        m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
+        m1.metric("Est. Birth Year", est_by_str)
+        m2.metric("Meets Total", len(ath_df))
+        m3.metric("Career (Years)", f"{longevity_yrs:.1f}")
+        m4.metric("PR Squat", f"{pr_squat * mult:.1f}")
+        m5.metric("PR Bench", f"{pr_bench * mult:.1f}")
+        m6.metric("PR Deadlift", f"{pr_deadlift * mult:.1f}")
+        m7.metric("PR Total", f"{pr_total * mult:.1f}")
+        m8.metric("PR DOTS", f"{pr_dots:.1f}")
         
         st.markdown("---")
         st.subheader("Performance History", anchor=False)
@@ -1824,41 +1866,19 @@ elif analysis_mode == "Athlete vs athlete":
         st.markdown("---")
         st.subheader("Common Meets (Cross-Year Comparison)", anchor=False)
         
-        df_a_common = df_a.copy()
-        df_b_common = df_b.copy()
-        df_a_common["_MeetDate"] = pd.to_datetime(df_a_common["Date"], errors="coerce").dt.normalize()
-        df_b_common["_MeetDate"] = pd.to_datetime(df_b_common["Date"], errors="coerce").dt.normalize()
-
-        common = pd.merge(
-            df_a_common,
-            df_b_common,
-            on=["NormMeet", "_MeetDate"],
-            suffixes=(f'_{name_a}', f'_{name_b}')
-        )
-
+        df_a_dedup = df_a.sort_values('Total', ascending=False).drop_duplicates(subset=['NormMeet'])
+        df_b_dedup = df_b.sort_values('Total', ascending=False).drop_duplicates(subset=['NormMeet'])
+        
+        common = pd.merge(df_a_dedup, df_b_dedup, on="NormMeet", suffixes=(f'_{name_a}', f'_{name_b}'))
+        
         if not common.empty:
             common_display = common.copy()
             for c in common_display.columns:
-                if c.endswith(f"_{name_a}"):
-                    common_display.rename(columns={c: c.replace(f"_{name_a}", f" ({name_a})")}, inplace=True)
-                elif c.endswith(f"_{name_b}"):
-                    common_display.rename(columns={c: c.replace(f"_{name_b}", f" ({name_b})")}, inplace=True)
-
-            for col in [f"Total ({name_a})", f"Total ({name_b})", f"Bodyweight ({name_a})", f"Bodyweight ({name_b})"]:
-                if col in common_display.columns:
-                    common_display[col] = common_display[col].apply(
-                        lambda value: fmt(value * mult) if pd.notna(value) else ""
-                    )
-
-            for col in [f"Date ({name_a})", f"Date ({name_b})"]:
-                if col in common_display.columns:
-                    common_display[col] = pd.to_datetime(
-                        common_display[col], errors="coerce"
-                    ).dt.strftime("%Y-%m-%d")
-
-            if "_MeetDate" in common_display.columns:
-                common_display.drop(columns=["_MeetDate"], inplace=True)
-
+                if c.endswith(f"_{name_a}"): common_display.rename(columns={c: c.replace(f"_{name_a}", f" ({name_a})")}, inplace=True)
+                elif c.endswith(f"_{name_b}"): common_display.rename(columns={c: c.replace(f"_{name_b}", f" ({name_b})")}, inplace=True)
+            for col in [f"Total ({name_a})", f"Total ({name_b})"]: 
+                if col in common_display.columns: common_display[col] = (common_display[col] * mult).round(1)
+            
             avail_common_cols = common_display.columns.tolist()
             default_common = ["NormMeet", f"Date ({name_a})", f"Date ({name_b})", f"Total ({name_a})", f"Total ({name_b})", f"Dots ({name_a})", f"Dots ({name_b})"]
             sel_common_cols = st.multiselect("Select columns:", avail_common_cols, default=[c for c in default_common if c in avail_common_cols])
