@@ -473,6 +473,36 @@ def render_athlete_selectbox(label, key):
         return st.selectbox("Select exact match:", options=["Type above to search..."], disabled=True, key=key)
 
 # ---------------------------------------------------------------------------
+# INITIALIZATION & STATE MANAGEMENT
+# ---------------------------------------------------------------------------
+# Streamlit creates session state keys lazily. Initialize every key that is
+# accessed before a widget callback can create it, so a fresh session never
+# fails during the first script run.
+for key in ["df_a", "df_b", "ath_df", "ath_df_a", "ath_df_b", "df_comp"]:
+    if key not in st.session_state:
+        st.session_state[key] = pd.DataFrame()
+
+# Read URL parameters only once. This preserves deep links without allowing
+# normal widget interactions to be overwritten on subsequent reruns.
+if "app_initialized" not in st.session_state:
+    params = st.query_params
+    st.session_state.active_mode = params.get("mode", "Result vs group")
+
+    if params.get("mode") == "Athlete" and params.get("athlete"):
+        st.session_state.ath_selected = urllib.parse.unquote(params["athlete"])
+        st.session_state.submit_clicked = True
+
+    st.session_state.app_initialized = True
+
+# Defensive defaults for a completely fresh Streamlit session.
+if "active_mode" not in st.session_state:
+    st.session_state.active_mode = "Result vs group"
+if "score_sys" not in st.session_state:
+    st.session_state.score_sys = "Dots"
+if "submit_clicked" not in st.session_state:
+    st.session_state.submit_clicked = False
+
+# ---------------------------------------------------------------------------
 # MAIN LAYOUT
 # ---------------------------------------------------------------------------
 st.sidebar.title("Navigation")
@@ -487,10 +517,9 @@ def change_mode():
     st.query_params["mode"] = st.session_state._mode_radio
     st.session_state.submit_clicked = False
 
-# --- ADD THIS VALIDATION CHECK ---
+# Validate URL or persisted state before using it as the radio index.
 if st.session_state.active_mode not in MODES:
-    st.session_state.active_mode = "Result vs group" # Fallback to default
-# ---------------------------------
+    st.session_state.active_mode = "Result vs group"
 
 analysis_mode = st.sidebar.radio("Select Analysis Mode", MODES, index=MODES.index(st.session_state.active_mode), key="_mode_radio", on_change=change_mode)
 
