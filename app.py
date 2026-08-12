@@ -1594,22 +1594,28 @@ elif analysis_mode == "Group vs group":
         
         avail_cols = list(combined_sorted.columns)
         default_cols = ["Rank", "Group Label", "Name", "Age", "WeightClass", "Bodyweight", "Total", st.session_state.score_sys, "Country", "Tested", "Equipment", "Federation"]
-        sel_cols = st.multiselect("Add more columns to the table:", avail_cols, default=[c for c in default_cols if c in avail_cols], key="gvg_cols")
-        
-        def color_groups(row):
-            if row["Group Label"] == name_a:
-                return ['background-color: rgba(30, 144, 255, 0.15)'] * len(row)
-            else:
-                return ['background-color: rgba(255, 99, 71, 0.15)'] * len(row)
+        sel_cols = st.multiselect(
+          "Add more columns to the table:",
+         avail_cols,
+         default=[c for c in default_cols if c in avail_cols],
+         key="gvg_cols",
+        )       
 
         display_df = combined_sorted[sel_cols].copy()
-        
-        for c in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]: 
-            if c in display_df.columns: display_df[c] = (display_df[c] * mult).round(1)
-        for c in ["Dots", "Wilks", "GL Points"]: 
-            if c in display_df.columns: display_df[c] = display_df[c].round(2)
-            
-        st.dataframe(display_df.style.apply(color_groups, axis=1), use_container_width=True)
+
+        for c in ["Bodyweight", "Squat", "Bench", "Deadlift", "Total"]:
+            if c in display_df.columns:
+             display_df[c] = (display_df[c] * mult).round(1)
+
+        for c in ["Dots", "Wilks", "GL Points"]:
+         if c in display_df.columns:
+             display_df[c] = display_df[c].round(2)
+
+        st.dataframe(
+         display_df,
+            use_container_width=True,
+         height=620,
+        )
 
 elif analysis_mode == "Athlete":
     ath_df_raw = st.session_state.ath_df
