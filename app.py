@@ -57,6 +57,50 @@ def get_duckdb_connection():
     """)
     return conn
 
+def fmt(val):
+    """Format numeric values consistently for compact table output."""
+    if pd.isna(val):
+        return ""
+    value = float(val)
+    return f"{int(value)}" if value == int(value) else f"{value:.1f}"
+
+
+def format_attempt(val):
+    """Format a lift attempt and mark negative values as failed attempts."""
+    if pd.isna(val) or val == 0:
+        return ""
+    value = float(val)
+    if value < 0:
+        return f"{abs(value)} (Failed)"
+    return str(value)
+
+
+def normalize_meet_name(name):
+    """Normalize competition names so the same meet can be matched across years."""
+    if not isinstance(name, str):
+        return ""
+    normalized = re.sub(r"\b\d+(st|nd|rd|th)\b", "", name, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b\d{4}\b", "", normalized)
+    normalized = re.sub(r"\bannual\b", "", normalized, flags=re.IGNORECASE)
+    return " ".join(normalized.split()).strip()
+
+
+def calc_1rm(weight, reps):
+    """Estimate one-repetition maximum using the Epley formula."""
+    if reps <= 1:
+        return weight
+    return weight * (1.0 + reps / 30.0)
+
+
+def sort_weight_class(value):
+    """Convert weight-class labels into numeric values for stable sorting."""
+    value_str = str(value).replace("+", "").strip()
+    try:
+        return float(value_str)
+    except ValueError:
+        return 9999.0
+
+
 @st.cache_data
 def load_countries_and_continents():
     default_continents = {
