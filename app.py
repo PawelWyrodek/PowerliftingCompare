@@ -901,7 +901,7 @@ def render_competition_section(df_src, cfg):
         for c in ["Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"]:
             if c in display_t_df.columns: 
                 display_t_df[c] = pd.to_numeric(display_t_df[c], errors='coerce') * mult
-                display_t_df[c] = format_attempt_series(display_t_df[c])
+                display_t_df[c] = display_t_df[c].map(format_attempt)
                 if use_lbs:
                     new_c = c.replace("Kg", "Lbs")
                     display_t_df.rename(columns={c: new_c}, inplace=True)
@@ -1612,7 +1612,8 @@ elif analysis_mode == "Athlete":
             if "Experience" in hist_df.columns: hist_df["Experience"] = hist_df["Experience"].round(1)
 
             attempt_cols = [c for c in ["Squat1Kg", "Squat2Kg", "Squat3Kg", "Bench1Kg", "Bench2Kg", "Bench3Kg", "Deadlift1Kg", "Deadlift2Kg", "Deadlift3Kg"] if c in hist_df.columns]
-            for ac in attempt_cols: hist_df[ac] = format_attempt_series(hist_df[ac])
+            for ac in attempt_cols:
+                hist_df[ac] = hist_df[ac].map(format_attempt)
             
             all_possible_cols = ["MeetName", "NormMeet", "Event", "Place", "Date", "WeightClass", "Age", "Experience", "Meet#", "Bodyweight", "Total", "Dots", "Wilks", "GL Points"] + attempt_cols + ["Federation", "ParentFederation", "Equipment", "Tested"]
             avail_cols = [c for c in all_possible_cols if c in hist_df.columns]
